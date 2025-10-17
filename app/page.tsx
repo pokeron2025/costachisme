@@ -3,9 +3,13 @@ import { useEffect, useState } from 'react';
 import { z } from 'zod';
 
 const schema = z.object({
-  category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(5).max(80),     // ahora mínimo 5 caracteres
-  content: z.string().min(12).max(400), // ahora mínimo 12 caracteres
+  category: z.enum(['RUMOR','REPORTE']),
+  title: z.string()
+    .min(5, { message: "El título debe tener al menos 5 caracteres." })
+    .max(80, { message: "El título no puede superar 80 caracteres." }),
+  content: z.string()
+    .min(12, { message: "El texto debe tener al menos 12 caracteres." })
+    .max(400, { message: "El texto no puede superar 400 caracteres." }),
   barrio: z.string().max(60).optional(),
   imagen_url: z.string().url().optional().or(z.literal('').transform(() => undefined)),
 });
