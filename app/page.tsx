@@ -33,23 +33,13 @@ export default function Home() {
   const [feed, setFeed] = useState<Item[]>([]);
   const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
   const [msg, setMsg] = useState<string | null>(null);
-  const [voted, setVoted] = useState<Record<string, true>>({}); // ids ya votados en este navegador
+  const [voting, setVoting] = useState<string | null>(null); // id que se está votando ahora
 
   // Asegura un device_id por navegador (para RPC)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       if (!localStorage.getItem('device_id')) {
         localStorage.setItem('device_id', crypto.randomUUID());
-      }
-      // Carga ids votados previamente
-      const raw = localStorage.getItem('voted_ids');
-      if (raw) {
-        try {
-          const arr: string[] = JSON.parse(raw);
-          const map: Record<string, true> = {};
-          arr.forEach(id => (map[id] = true));
-          setVoted(map);
-        } catch {}
       }
     }
   }, []);
@@ -96,10 +86,11 @@ export default function Home() {
     }
   }
 
-  // Votar (optimista + evita duplicados)
+  // Votar (optimista + bloquea solo mientras se envía)
   async function handleVote(id: string) {
-    // si ya votó este navegador, no permitir
-    if (voted[id]) return;
+    // evita doble click rápido
+    if (voting) return;
+    setVoting(id);
 
     const voter = (typeof window !== 'undefined' && localStorage.getItem('device_id')) || 'anon';
 
@@ -109,16 +100,6 @@ export default function Home() {
         item.id === id ? { ...item, score: (item.score ?? 0) + 1 } : item
       )
     );
-    setVoted(prev => ({ ...prev, [id]: true }));
-
-    // Persistir ids votados
-    if (typeof window !== 'undefined') {
-      const raw = localStorage.getItem('voted_ids');
-      const arr: string[] = raw ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : [];
-      if (!arr.includes(id)) {
-        localStorage.setItem('voted_ids', JSON.stringify([...arr, id]));
-      }
-    }
 
     // 2) Llamada al servidor
     try {
@@ -135,20 +116,6 @@ export default function Home() {
             item.id === id ? { ...item, score: Math.max((item.score ?? 1) - 1, 0) } : item
           )
         );
-        setVoted(prev => {
-          const copy = { ...prev };
-          delete copy[id];
-          return copy;
-        });
-        if (typeof window !== 'undefined') {
-          const raw2 = localStorage.getItem('voted_ids');
-          if (raw2) {
-            try {
-              const arr2: string[] = JSON.parse(raw2).filter(x => x !== id);
-              localStorage.setItem('voted_ids', JSON.stringify(arr2));
-            } catch {}
-          }
-        }
         alert(j.error || 'No se pudo registrar tu voto.');
       }
     } catch (e) {
@@ -158,21 +125,9 @@ export default function Home() {
           item.id === id ? { ...item, score: Math.max((item.score ?? 1) - 1, 0) } : item
         )
       );
-      setVoted(prev => {
-        const copy = { ...prev };
-        delete copy[id];
-        return copy;
-      });
-      if (typeof window !== 'undefined') {
-        const raw2 = localStorage.getItem('voted_ids');
-        if (raw2) {
-          try {
-            const arr2: string[] = JSON.parse(raw2).filter(x => x !== id);
-            localStorage.setItem('voted_ids', JSON.stringify(arr2));
-          } catch {}
-        }
-      }
       alert('Error de red al votar.');
+    } finally {
+      setVoting(null);
     }
   }
 
@@ -255,13 +210,13 @@ export default function Home() {
               <div className="mt-2 flex items-center gap-3">
                 <button
                   onClick={() => handleVote(item.id)}
-                  disabled={!!voted[item.id]}
+                  disabled={voting === item.id}
                   className={`px-2 py-1 rounded text-sm ${
-                    voted[item.id] ? 'bg-gray-300 text-gray-700 cursor-not-allowed' : 'bg-blue-500 text-white'
+                    voting === item.id ? 'bg-gray-300 text-gray-700 cursor-wait' : 'bg-blue-500 text-white'
                   }`}
-                  title={voted[item.id] ? 'Ya votaste' : 'Me pasó también'}
+                  title="Me pasó también"
                 >
-                  {voted[item.id] ? '¡Gracias! 👍' : 'Me pasó también 👍'}
+                  {voting === item.id ? 'Enviando…' : 'Me pasó también 👍'}
                 </button>
                 <span className="text-sm text-gray-700">
                   {item.score ?? 0} votos
