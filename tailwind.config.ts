@@ -15,10 +15,6 @@ const config: Config = {
         muted: "#f3f4f6",
         "muted-foreground": "#6b7280",
       },
-      borderRadius: {
-        xl: "1rem",
-        "2xl": "1.5rem",
-      }
     },
   },
   plugins: [],
