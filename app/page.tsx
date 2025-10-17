@@ -1,7 +1,9 @@
 'use client';
+
 import { useEffect, useState } from 'react';
 import { z } from 'zod';
 
+// Esquema de validación del formulario
 const schema = z.object({
   category: z.enum(['RUMOR','REPORTE']),
   title: z.string()
@@ -14,66 +16,163 @@ const schema = z.object({
   imagen_url: z.string().url().optional().or(z.literal('')).transform(() => undefined),
 });
 
+type Item = {
+  id: string;
+  title: string;
+  content: string;
+  barrio?: string | null;
+  imagen_url?: string | null;
+  category: 'RUMOR' | 'REPORTE';
+  created_at: string;
+  score?: number | null;
+};
+
 export default function Home() {
   const [tab, setTab] = useState<'RUMOR' | 'REPORTE'>('RUMOR');
   const [loading, setLoading] = useState(false);
-  const [feed, setFeed] = useState<any[]>([]);
+  const [feed, setFeed] = useState<Item[]>([]);
   const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  const [voted, setVoted] = useState<Record<string, true>>({}); // ids ya votados en este navegador
 
-  // Generar un ID único por navegador (para evitar votos repetidos)
+  // Asegura un device_id por navegador (para RPC)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       if (!localStorage.getItem('device_id')) {
         localStorage.setItem('device_id', crypto.randomUUID());
       }
+      // Carga ids votados previamente
+      const raw = localStorage.getItem('voted_ids');
+      if (raw) {
+        try {
+          const arr: string[] = JSON.parse(raw);
+          const map: Record<string, true> = {};
+          arr.forEach(id => (map[id] = true));
+          setVoted(map);
+        } catch {}
+      }
     }
   }, []);
 
+  // Carga de publicaciones aprobadas
   async function load() {
-    const r = await fetch('/api/list');
-    const j = await r.json();
-    if (j.ok) setFeed(j.data);
+    try {
+      const r = await fetch('/api/list');
+      const j = await r.json();
+      if (j.ok) setFeed(j.data as Item[]);
+    } catch (e) {
+      console.error(e);
+    }
   }
-
   useEffect(() => { load(); }, []);
 
+  // Enviar formulario
   async function submit() {
     setMsg(null);
     const parsed = schema.safeParse({ ...form, category: tab });
     if (!parsed.success) {
-      setMsg(parsed.error.errors.map(e => e.message).join(', '));
+      setMsg(parsed.error.errors.map(e => e.message).join(' · '));
       return;
     }
     setLoading(true);
-    const r = await fetch('/api/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...form, category: tab }),
-    });
-    const j = await r.json();
-    setLoading(false);
-    if (!j.ok) {
-      setMsg(j.error);
-    } else {
-      setMsg('¡Enviado para revisión!');
-      setForm({ title: '', content: '', barrio: '', imagen_url: '' });
-      load();
+    try {
+      const r = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, category: tab }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setMsg(j.error || 'No se pudo enviar. Intenta de nuevo.');
+      } else {
+        setMsg('✅ ¡Enviado para revisión!');
+        setForm({ title: '', content: '', barrio: '', imagen_url: '' });
+        load(); // recarga la lista
+      }
+    } catch (e: any) {
+      setMsg(e?.message || 'Error de red.');
+    } finally {
+      setLoading(false);
     }
   }
 
+  // Votar (optimista + evita duplicados)
   async function handleVote(id: string) {
+    // si ya votó este navegador, no permitir
+    if (voted[id]) return;
+
     const voter = (typeof window !== 'undefined' && localStorage.getItem('device_id')) || 'anon';
-    const r = await fetch('/api/vote', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, voter }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      setFeed(feed.map(item =>
+
+    // 1) Actualización optimista en UI
+    setFeed(prev =>
+      prev.map(item =>
         item.id === id ? { ...item, score: (item.score ?? 0) + 1 } : item
-      ));
+      )
+    );
+    setVoted(prev => ({ ...prev, [id]: true }));
+
+    // Persistir ids votados
+    if (typeof window !== 'undefined') {
+      const raw = localStorage.getItem('voted_ids');
+      const arr: string[] = raw ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : [];
+      if (!arr.includes(id)) {
+        localStorage.setItem('voted_ids', JSON.stringify([...arr, id]));
+      }
+    }
+
+    // 2) Llamada al servidor
+    try {
+      const r = await fetch('/api/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, voter }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        // rollback si hay error
+        setFeed(prev =>
+          prev.map(item =>
+            item.id === id ? { ...item, score: Math.max((item.score ?? 1) - 1, 0) } : item
+          )
+        );
+        setVoted(prev => {
+          const copy = { ...prev };
+          delete copy[id];
+          return copy;
+        });
+        if (typeof window !== 'undefined') {
+          const raw2 = localStorage.getItem('voted_ids');
+          if (raw2) {
+            try {
+              const arr2: string[] = JSON.parse(raw2).filter(x => x !== id);
+              localStorage.setItem('voted_ids', JSON.stringify(arr2));
+            } catch {}
+          }
+        }
+        alert(j.error || 'No se pudo registrar tu voto.');
+      }
+    } catch (e) {
+      // rollback por error de red
+      setFeed(prev =>
+        prev.map(item =>
+          item.id === id ? { ...item, score: Math.max((item.score ?? 1) - 1, 0) } : item
+        )
+      );
+      setVoted(prev => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
+      if (typeof window !== 'undefined') {
+        const raw2 = localStorage.getItem('voted_ids');
+        if (raw2) {
+          try {
+            const arr2: string[] = JSON.parse(raw2).filter(x => x !== id);
+            localStorage.setItem('voted_ids', JSON.stringify(arr2));
+          } catch {}
+        }
+      }
+      alert('Error de red al votar.');
     }
   }
 
@@ -153,12 +252,16 @@ export default function Home() {
                   className="mt-2 rounded max-h-48"
                 />
               )}
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex items-center gap-3">
                 <button
                   onClick={() => handleVote(item.id)}
-                  className="px-2 py-1 bg-blue-500 text-white rounded text-sm"
+                  disabled={!!voted[item.id]}
+                  className={`px-2 py-1 rounded text-sm ${
+                    voted[item.id] ? 'bg-gray-300 text-gray-700 cursor-not-allowed' : 'bg-blue-500 text-white'
+                  }`}
+                  title={voted[item.id] ? 'Ya votaste' : 'Me pasó también'}
                 >
-                  Me pasó también 👍
+                  {voted[item.id] ? '¡Gracias! 👍' : 'Me pasó también 👍'}
                 </button>
                 <span className="text-sm text-gray-700">
                   {item.score ?? 0} votos
