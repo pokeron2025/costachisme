@@ -9,7 +9,7 @@ const supabase = createClient(
 export async function GET() {
   const { data, error } = await supabase
     .from('submissions')
-    .select('*')
+    .select('id, title, content, barrio, imagen_url, category, created_at, score')
     .eq('status', 'approved')
     .order('created_at', { ascending: false })
     .limit(100);
