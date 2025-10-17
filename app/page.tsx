@@ -38,8 +38,12 @@ export default function Home() {
   }
 
   return (
-    <div>
-      <div className="mb-4 flex gap-2">
+  <div>
+    <h1 className="text-3xl font-bold text-red-500 mb-4">
+      🚀 Hola desde Tailwind!
+    </h1>
+
+    <div className="mb-4 flex gap-2">
         <button onClick={() => setTab('RUMOR')} className={`px-3 py-2 rounded-full border ${tab==='RUMOR'?'bg-primary text-white':'bg-white'}`}>Rumor 😏</button>
         <button onClick={() => setTab('REPORTE')} className={`px-3 py-2 rounded-full border ${tab==='REPORTE'?'bg-primary text-white':'bg-white'}`}>Buzón 📨</button>
       </div>
