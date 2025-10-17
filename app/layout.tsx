@@ -1,6 +1,8 @@
+import "./globals.css";
+
 export const metadata = {
   title: "Costachisme — Rumores, risas y voz ciudadana",
-  description: "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano."
+  description: "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
