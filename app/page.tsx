@@ -4,8 +4,8 @@ import { z } from 'zod';
 
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(8).max(80),
-  content: z.string().min(20).max(600),
+  title: z.string().min(5).max(80),     // ahora mínimo 5 caracteres
+  content: z.string().min(12).max(400), // ahora mínimo 12 caracteres
   barrio: z.string().max(60).optional(),
   imagen_url: z.string().url().optional().or(z.literal('').transform(() => undefined)),
 });
