@@ -38,15 +38,10 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl p-4">
-      <header className="mb-6">
-        <h1 className="text-3xl font-extrabold">Se Dice en Salina</h1>
-        <p className="text-sm text-gray-600">Rumores divertidos y reportes ciudadanos, con moderación previa.</p>
-      </header>
-
-      <div className="flex gap-2 mb-4">
-        <button onClick={() => setTab('RUMOR')} className={`px-3 py-2 rounded-full border ${tab==='RUMOR'?'bg-black text-white':'bg-white'}`}>Rumor 😏</button>
-        <button onClick={() => setTab('REPORTE')} className={`px-3 py-2 rounded-full border ${tab==='REPORTE'?'bg-black text-white':'bg-white'}`}>Buzón 📨</button>
+    <div>
+      <div className="mb-4 flex gap-2">
+        <button onClick={() => setTab('RUMOR')} className={`px-3 py-2 rounded-full border ${tab==='RUMOR'?'bg-primary text-white':'bg-white'}`}>Rumor 😏</button>
+        <button onClick={() => setTab('REPORTE')} className={`px-3 py-2 rounded-full border ${tab==='REPORTE'?'bg-primary text-white':'bg-white'}`}>Buzón 📨</button>
       </div>
 
       <section className="grid md:grid-cols-2 gap-6">
@@ -69,8 +64,8 @@ export default function Home() {
             </div>
           </div>
 
-          <p className="text-xs text-gray-500 mt-2">Reglas: sin nombres, teléfonos, matrículas, amenazas ni insultos. Todo pasa por revisión.</p>
-          <button disabled={loading} onClick={submit} className="mt-3 px-4 py-2 rounded-xl bg-green-700 text-white">{loading?'Enviando...':'Enviar'}</button>
+          <p className="text-xs text-muted-foreground mt-2">Reglas: sin nombres, teléfonos, matrículas, amenazas ni insultos. Todo pasa por revisión.</p>
+          <button disabled={loading} onClick={submit} className="mt-3 px-4 py-2 rounded-xl bg-primary text-white">{loading?'Enviando...':'Enviar'}</button>
           {msg && <p className="mt-2 text-sm">{msg}</p>}
         </div>
 
@@ -79,7 +74,7 @@ export default function Home() {
           <ul className="space-y-3">
             {feed.map(item => (
               <li key={item.id} className="border rounded-xl p-3">
-                <div className="text-xs text-gray-500">{new Date(item.created_at).toLocaleString()}</div>
+                <div className="text-xs text-muted-foreground">{new Date(item.created_at).toLocaleString()}</div>
                 <div className="text-[10px] uppercase tracking-wide">{item.category}</div>
                 <h3 className="font-semibold">{item.title}</h3>
                 <p className="text-sm whitespace-pre-wrap">{item.content}</p>
@@ -90,10 +85,6 @@ export default function Home() {
           </ul>
         </div>
       </section>
-
-      <footer className="mt-10 text-xs text-gray-500">
-        Este sitio es para fines de entretenimiento y participación ciudadana. Las publicaciones son anónimas y moderadas. No se permite difamación ni datos personales.
-      </footer>
-    </main>
+    </div>
   );
 }
