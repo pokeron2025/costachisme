@@ -22,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${poppins.className} min-h-screen bg-white text-[#111827]`}>
         {/* HEADER */}
         <header className="sticky top-0 z-30 border-b bg-[#2f7f72]/95 backdrop-blur supports-[backdrop-filter]:bg-[#2f7f72]/80">
+          <link rel="icon" href="/logo-icon.svg" type="image/svg+xml" />
           <div className="mx-auto max-w-5xl flex items-center gap-3 p-3 text-white">
             <Image
               src="/logo.svg"
