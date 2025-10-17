@@ -29,10 +29,16 @@ export default function Home() {
   useEffect(() => { load(); }, []);
 
   async function submit() {
-    setMsg(null);
-    const payload = { category: tab, ...form };
-    const parsed = schema.safeParse(payload);
-    if (!parsed.success) { setMsg('Revisa los campos (mínimos y máximos).'); return; }
+  setMsg(null);
+const payload = { category: tab, ...form };
+const parsed = schema.safeParse(payload);
+
+if (!parsed.success) {
+  // juntar todos los mensajes de error
+  const mensajes = parsed.error.errors.map(e => e.message).join(" | ");
+  setMsg(mensajes);
+  return;
+}
     setLoading(true);
     const r = await fetch('/api/submit', { method: 'POST', body: JSON.stringify(parsed.data) });
     const j = await r.json();
