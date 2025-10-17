@@ -15,10 +15,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Falta id' }, { status: 400 });
     }
 
-    // 👇 Usa la versión de RPC que creamos con control de duplicados
+    // 👇 Llamamos al RPC con los nombres nuevos de parámetros
     const { error } = await supabase.rpc('increment_score', {
-      submission_id: id,
-      voter: voter ?? 'anon',
+      p_submission_id: id,
+      p_voter: voter ?? 'anon',
     });
 
     if (error) {
@@ -27,6 +27,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message ?? 'Error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e.message ?? 'Error' },
+      { status: 500 }
+    );
   }
 }
