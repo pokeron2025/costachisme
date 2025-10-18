@@ -1,40 +1,35 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+// app/api/comments/[submissionId]/route.ts
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+// Evita caching en Vercel para este endpoint
+export const dynamic = 'force-dynamic';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export async function GET(_: Request, { params }: { params: { submissionId: string } }) {
-  const { submissionId } = params;
-  const { data, error } = await supabase
-    .from("comments")
-    .select("id, body, nickname, created_at")
-    .eq("submission_id", submissionId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+// GET: lista comentarios de una publicación (submissionId)
+// Admite ?limit=50 (default 50, tope 100)
+export async function GET(
+  req: Request,
+  { params }: { params: { submissionId: string } }
+) {
+  try {
+    const submissionId = params?.submissionId;
+    if (!submissionId) {
+      return NextResponse.json(
+        { ok: false, error: 'Falta submissionId en la ruta.' },
+        { status: 400 }
+      );
+    }
 
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-  }
-  return NextResponse.json({ ok: true, data });
-}
+    const url = new URL(req.url);
+    const limitParam = url.searchParams.get('limit');
+    const limit = Math.max(
+      1,
+      Math.min(100, Number.isFinite(Number(limitParam)) ? Number(limitParam) : 50)
+    );
 
-export async function POST(req: Request, { params }: { params: { submissionId: string } }) {
-  const { submissionId } = params;
-  const { body, nickname } = await req.json();
-
-  if (!body || body.length < 3) {
-    return NextResponse.json({ ok: false, error: "Comentario muy corto" }, { status: 400 });
-  }
-
-  const { error } = await supabase.from("comments").insert([
-    { submission_id: submissionId, body, nickname },
-  ]);
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
-  }
-  return NextResponse.json({ ok: true });
-}
+    const { data,
