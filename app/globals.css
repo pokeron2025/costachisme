@@ -34,3 +34,29 @@ html, body {
 
 /* Selección y scroll */
 ::selection { background: #34d39933; }
+/* ===== Tema por hora (día/noche) con CSS variables ===== */
+
+:root {
+  --bg: #f8fafc;           /* fondo día */
+  --fg: #0f172a;           /* texto día */
+  --muted-fg: #475569;     /* texto secundario día */
+  --card: #ffffff;         /* tarjetas día */
+  --border: #e5e7eb;       /* bordes día */
+  --header-bg: #2f7f72;    /* header día (tu verde) */
+  --header-fg: #ffffff;    /* texto header día */
+}
+
+.theme-night {
+  --bg: #0b1220;           /* fondo noche */
+  --fg: #e6edf3;           /* texto noche */
+  --muted-fg: #9fb0bf;     /* texto secundario noche */
+  --card: #0f172a;         /* tarjetas noche */
+  --border: #1f2937;       /* bordes noche */
+  --header-bg: #0f172a;    /* header noche */
+  --header-fg: #e6edf3;    /* texto header noche */
+}
+
+/* Integración: clases Tailwind comunes respetan el tema */
+html, body { background: var(--bg); color: var(--fg); }
+.theme-night .bg-white { background-color: var(--card) !important; }
+.theme-night .border { border-color: var(--border) !important; }
