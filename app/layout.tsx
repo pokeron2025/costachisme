@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               priority
             />
             <div className="leading-tight ml-2">
-              <h1 className="text-lg font-extrabold tracking-wide">Costachisme</h1>
+              <h1 className="text-lg font-extrabold tracking-wide">SalinaCruz</h1>
               <p className="text-[12px] opacity-80">Rumores, risas y voz ciudadana</p>
             </div>
           </div>
