@@ -26,17 +26,31 @@ type ReactionTotals = {
   sad_count: number;
 };
 
+type Comment = {
+  id: string;
+  body: string;
+  nickname: string | null;
+  created_at: string;
+  submission_id?: string; // útil para merges en realtime
+};
+
 type FeedItem = Submission & {
   totals: ReactionTotals;
-  comments?: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
+  comments?: Comment[];
 };
 
 /* ==================== Validación del formulario ==================== */
 
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(5).max(80),
-  content: z.string().min(12).max(400),
+  title: z
+    .string()
+    .min(5, { message: 'El título debe tener al menos 5 caracteres.' })
+    .max(80, { message: 'El título no puede superar 80 caracteres.' }),
+  content: z
+    .string()
+    .min(12, { message: 'El texto debe tener al menos 12 caracteres.' })
+    .max(400, { message: 'El texto no puede superar 400 caracteres.' }),
   barrio: z.string().max(60).optional().or(z.literal('')),
   imagen_url: z.string().url().optional().or(z.literal('')),
 });
@@ -114,20 +128,20 @@ export default function Home() {
         setMsg(j.error || 'No se pudo cargar el feed.');
         return;
       }
-      const normalized: FeedItem[] = (j.data as Submission[]).map((s) => ({
+      const normalized: FeedItem[] = (j.data as Submission[]).map((s: any) => ({
         ...s,
         totals: {
-          like_count: (s as any).like_count ?? 0,
-          dislike_count: (s as any).dislike_count ?? 0,
-          haha_count: (s as any).haha_count ?? 0,
-          wow_count: (s as any).wow_count ?? 0,
-          angry_count: (s as any).angry_count ?? 0,
-          sad_count: (s as any).sad_count ?? 0,
+          like_count: s.like_count ?? 0,
+          dislike_count: s.dislike_count ?? 0,
+          haha_count: s.haha_count ?? 0,
+          wow_count: s.wow_count ?? 0,
+          angry_count: s.angry_count ?? 0,
+          sad_count: s.sad_count ?? 0,
         },
         comments: [],
       }));
       setFeed(normalized);
-      // opcional: precargar comentarios
+      // precargar comentarios (no bloquea UI)
       normalized.forEach((it) => fetchComments(it.id));
     } catch (e: any) {
       setMsg(e?.message || 'Error de red al cargar el feed.');
@@ -168,10 +182,28 @@ export default function Home() {
     );
   }
 
+  /* ---------- Comentarios: fetch lista por publicación ---------- */
+  async function fetchComments(submissionId: string) {
+    try {
+      const r = await fetch(`/api/comments/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
+        );
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
   /* ---------- Realtime: reacciones y comentarios ---------- */
   React.useEffect(() => {
+    // canal nuevo para evitar fantasmas de suscripciones anteriores
     const channel = supabaseBrowser
-      .channel('public:reactions-comments')
+      .channel('public:reactions-comments-v2')
+
+      // ► Reacciones: cuando alguien reacciona, refrescamos solo esa tarjeta
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'reactions' },
@@ -182,9 +214,49 @@ export default function Home() {
           if (sid) refreshOne(sid);
         }
       )
+
+      // ► Comentarios: INSERT/DELETE hacen merge inmediato en memoria; UPDATE refresca lista
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'comments' },
+        { event: 'INSERT', schema: 'public', table: 'comments' },
+        (payload) => {
+          const c = payload.new as Comment;
+          const sid = (c as any)?.submission_id as string | undefined;
+          if (!sid) return;
+          setFeed((curr) =>
+            curr.map((it) =>
+              it.id === sid
+                ? {
+                    ...it,
+                    comments: [
+                      ...(it.comments ?? []),
+                      { id: c.id, body: c.body, nickname: c.nickname, created_at: c.created_at },
+                    ],
+                  }
+                : it
+            )
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'comments' },
+        (payload) => {
+          const c = payload.old as Comment;
+          const sid = (c as any)?.submission_id as string | undefined;
+          if (!sid) return;
+          setFeed((curr) =>
+            curr.map((it) =>
+              it.id === sid
+                ? { ...it, comments: (it.comments ?? []).filter((x) => x.id !== c.id) }
+                : it
+            )
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'comments' },
         (payload) => {
           const sid =
             (payload.new as any)?.submission_id ??
@@ -237,13 +309,13 @@ export default function Home() {
     }
   }
 
-  /* ---------- Hacer reacción (optimista + verificación) ---------- */
+  /* ---------- Reaccionar (optimista + verificación) ---------- */
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
-    // Optimista: sube 1 al contador local antes de la respuesta
+    // Optimista: +1 local mientras responde el server
     setFeed((curr) =>
       curr.map((it) =>
         it.id === submissionId
@@ -252,9 +324,7 @@ export default function Home() {
               totals: {
                 ...it.totals,
                 ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
-                ...(tag === 'dislike'
-                  ? { dislike_count: it.totals.dislike_count + 1 }
-                  : {}),
+                ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
                 ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
                 ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
                 ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
@@ -275,12 +345,12 @@ export default function Home() {
 
       if (!res.ok || !j.ok) {
         alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
-        // revertir optimismo ante error
-        refreshOne(submissionId);
+        // Revertir al dato real
+        await refreshOne(submissionId);
         return;
       }
 
-      // Si el backend devuelve totales, úsalo; si no, hacemos un refresh.
+      // Si el backend devolvió totales, úsalo; si no, asegúrate con refresh
       if (j.totals) {
         setFeed((curr) =>
           curr.map((it) =>
@@ -288,7 +358,7 @@ export default function Home() {
           )
         );
       } else {
-        setTimeout(() => refreshOne(submissionId), 400);
+        setTimeout(() => refreshOne(submissionId), 350);
       }
 
       setLocalReacted(submissionId, tag);
@@ -298,26 +368,8 @@ export default function Home() {
     }
   }
 
-  /* ---------- Comentarios ---------- */
-  async function fetchComments(submissionId: string) {
-    try {
-      const r = await fetch(`/api/comments/${submissionId}`);
-      const j = await r.json();
-      if (j.ok) {
-        setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
-        );
-      }
-    } catch {
-      /* silent */
-    }
-  }
-
-  async function submitComment(
-    submissionId: string,
-    body: string,
-    nickname: string | undefined
-  ) {
+  /* ---------- Comentar ---------- */
+  async function submitComment(submissionId: string, body: string, nickname?: string) {
     const r = await fetch(`/api/comments/${submissionId}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -325,15 +377,15 @@ export default function Home() {
     });
     const j = await r.json();
     if (j.ok) {
-      fetchComments(submissionId);
+      // el INSERT se reflejará en vivo por Realtime (merge en memoria),
+      // pero por si acaso confirmamos
+      setTimeout(() => fetchComments(submissionId), 200);
       return true;
     } else {
       alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
       return false;
     }
   }
-
-  const voterId = React.useMemo(() => getVoter(), []);
 
   /* ========================= Render ========================= */
 
@@ -472,10 +524,7 @@ export default function Home() {
                 <CommentsBlock
                   submissionId={it.id}
                   comments={it.comments ?? []}
-                  onAdd={async (body, nickname) => {
-                    const ok = await submitComment(it.id, body, nickname);
-                    return ok;
-                  }}
+                  onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
                 />
               </article>
             );
@@ -499,7 +548,7 @@ function CommentsBlock({
   onAdd,
 }: {
   submissionId: string;
-  comments: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
+  comments: Comment[];
   onAdd: (body: string, nickname?: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = React.useState(false);
