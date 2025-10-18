@@ -1,174 +1,158 @@
-'use client';
-import { useEffect, useState } from 'react';
-import { z } from 'zod';
+// app/page.tsx
+"use client";
 
-const schema = z.object({
-  category: z.enum(['RUMOR','REPORTE']),
-  title: z.string()
-    .min(5, { message: "El título debe tener al menos 5 caracteres." })
-    .max(80, { message: "El título no puede superar 80 caracteres." }),
-  content: z.string()
-    .min(12, { message: "El texto debe tener al menos 12 caracteres." })
-    .max(400, { message: "El texto no puede superar 400 caracteres." }),
-  barrio: z.string().max(60).optional(),
-  imagen_url: z.string().url().optional().or(z.literal('')).transform(() => undefined),
-});
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
-export default function Home() {
-  const [tab, setTab] = useState<'RUMOR' | 'REPORTE'>('RUMOR');
+interface Submission {
+  id: string;
+  title: string;
+  content: string;
+  score: number;
+  created_at: string;
+}
+
+export default function Page() {
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
   const [loading, setLoading] = useState(false);
-  const [feed, setFeed] = useState<any[]>([]);
-  const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
-  const [msg, setMsg] = useState<string | null>(null);
+  const [bumpedId, setBumpedId] = useState<string | null>(null);
+  const [votedIds, setVotedIds] = useState<string[]>([]);
 
-  async function load() {
-    const r = await fetch('/api/list');
-    const j = await r.json();
-    if (j.ok) setFeed(j.data);
-  }
+  // Cargar votos guardados en localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem("votedIds");
+    if (stored) setVotedIds(JSON.parse(stored));
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  // Traer submissions
+  useEffect(() => {
+    fetchSubmissions();
+  }, []);
 
-  async function submit() {
-    setMsg(null);
-    try {
-      const parsed = schema.parse({ ...form, category: tab });
-      setLoading(true);
-      const r = await fetch('/api/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...parsed, category: tab }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error);
-      setMsg('Enviado con éxito 🎉');
-      setForm({ title: '', content: '', barrio: '', imagen_url: '' });
-      load();
-    } catch (e: any) {
-      setMsg(e.message || 'Error');
-    } finally {
-      setLoading(false);
+  async function fetchSubmissions() {
+    const { data, error } = await supabase
+      .from("submissions")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (!error && data) {
+      setSubmissions(data as Submission[]);
     }
   }
 
-  async function votar(id: string) {
-    try {
-      const voter = localStorage.getItem(`voted_${id}`);
-      if (voter) {
-        setMsg('Ya votaste este rumor/reporte 👍');
-        return;
-      }
-      const r = await fetch('/api/vote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, voter: 'anon' }),
-      });
-      const j = await r.json();
-      if (j.ok) {
-        localStorage.setItem(`voted_${id}`, 'true');
-        load();
-      } else {
-        setMsg(j.error || 'Error al votar');
-      }
-    } catch (e) {
-      setMsg('Error al conectar con el servidor');
+  // Manejar voto
+  async function handleVote(id: string) {
+    if (votedIds.includes(id)) return;
+
+    const voter = "anon";
+    const { error } = await supabase.rpc("increment_score", {
+      p_submission_id: id,
+      p_voter: voter,
+    });
+
+    if (!error) {
+      setSubmissions((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, score: s.score + 1 } : s))
+      );
+      const next = [...votedIds, id];
+      setVotedIds(next);
+      localStorage.setItem("votedIds", JSON.stringify(next));
+      setBumpedId(id);
+      setTimeout(() => setBumpedId(null), 500);
+    }
+  }
+
+  // Crear rumor
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) return;
+
+    setLoading(true);
+    const { error } = await supabase.from("submissions").insert([
+      {
+        title,
+        content,
+      },
+    ]);
+
+    setLoading(false);
+    if (!error) {
+      setTitle("");
+      setContent("");
+      fetchSubmissions();
     }
   }
 
   return (
-    <main className="max-w-5xl mx-auto p-4">
-      {/* Encabezado moderno */}
-      <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-6 bg-gradient-to-r from-green-400 via-blue-500 to-purple-600 bg-clip-text text-transparent drop-shadow-sm">
-        Costachisme
-      </h1>
-
-      {/* Tabs */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setTab('RUMOR')}
-          className={`px-4 py-2 rounded-full font-semibold ${tab === 'RUMOR' ? 'bg-green-600 text-white' : 'bg-gray-200'}`}
+    <div className="space-y-8">
+      {/* Título principal */}
+      <section className="text-center mt-6">
+        <h1
+          className="text-3xl sm:text-4xl md:text-5xl font-extrabold 
+                     text-transparent bg-clip-text 
+                     bg-gradient-to-r from-teal-400 via-sky-500 to-indigo-500"
         >
-          Rumor 🤭
-        </button>
+          Costachisme
+        </h1>
+        <p className="mt-2 text-sm opacity-70">
+          Comparte tu voz, tu rumor, tu risa — ¡todo cuenta!
+        </p>
+      </section>
+
+      {/* Formulario */}
+      <form
+        onSubmit={handleSubmit}
+        className="card p-6 space-y-4 animate-fade-in"
+      >
+        <input
+          type="text"
+          placeholder="Título (ej: El rumor del día)"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="w-full rounded-lg border border-gray-300 dark:border-gray-700 p-2"
+        />
+        <textarea
+          placeholder="Escribe aquí tu rumor o buzón ciudadano..."
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          className="w-full rounded-lg border border-gray-300 dark:border-gray-700 p-2"
+          rows={3}
+        />
         <button
-          onClick={() => setTab('REPORTE')}
-          className={`px-4 py-2 rounded-full font-semibold ${tab === 'REPORTE' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
+          type="submit"
+          disabled={loading}
+          className="btn btn-primary"
         >
-          Buzón 📬
+          {loading ? "Enviando..." : "Enviar"}
         </button>
-      </div>
+      </form>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Formulario */}
-        <div className="bg-white rounded-xl shadow p-4">
-          <h2 className="text-lg font-semibold mb-2">Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}</h2>
-          <input
-            type="text"
-            placeholder="Ej. Se dice que..."
-            className="border rounded w-full p-2 mb-2"
-            value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
-          />
-          <p className="text-xs text-gray-500 mb-2">Mínimo 5 y máximo 80 caracteres.</p>
-
-          <textarea
-            placeholder="Sin nombres ni datos personales. Enfócate en situaciones."
-            className="border rounded w-full p-2 mb-2"
-            value={form.content}
-            onChange={(e) => setForm({ ...form, content: e.target.value })}
-          />
-          <p className="text-xs text-gray-500 mb-2">Mínimo 12 y máximo 400 caracteres.</p>
-
-          <input
-            type="text"
-            placeholder="Barrio/Colonia (opcional)"
-            className="border rounded w-full p-2 mb-2"
-            value={form.barrio}
-            onChange={(e) => setForm({ ...form, barrio: e.target.value })}
-          />
-
-          <input
-            type="url"
-            placeholder="URL de imagen (opcional)"
-            className="border rounded w-full p-2 mb-2"
-            value={form.imagen_url}
-            onChange={(e) => setForm({ ...form, imagen_url: e.target.value })}
-          />
-
-          <button
-            onClick={submit}
-            disabled={loading}
-            className="bg-green-700 text-white px-4 py-2 rounded hover:bg-green-800"
+      {/* Lista de rumores */}
+      <section className="space-y-4">
+        {submissions.map((row) => (
+          <div
+            key={row.id}
+            className="card card-hover p-4 animate-fade-in"
           >
-            {loading ? 'Enviando...' : 'Enviar'}
-          </button>
-
-          {msg && <p className="mt-2 text-sm text-gray-700">{msg}</p>}
-        </div>
-
-        {/* Feed */}
-        <div>
-          <h2 className="text-lg font-semibold mb-2">Lo más reciente (aprobado)</h2>
-          {feed.map((item) => (
-            <div key={item.id} className="bg-white rounded-xl shadow p-4 mb-3">
-              <p className="text-xs text-gray-500 mb-1">
-                {new Date(item.created_at).toLocaleString('es-MX')}
-              </p>
-              <p className="font-bold">{item.title}</p>
-              <p className="text-gray-700 mb-2">{item.content}</p>
-              {item.barrio && <p className="text-sm text-gray-500">📍 {item.barrio}</p>}
-              <p className="text-sm">👍 {item.score} votos</p>
+            <h2 className="font-semibold text-lg">{row.title}</h2>
+            <p className="text-sm opacity-80 mt-1">{row.content}</p>
+            <div className="flex items-center gap-3 mt-3">
               <button
-                onClick={() => votar(item.id)}
-                disabled={!!localStorage.getItem(`voted_${item.id}`)}
-                className="mt-2 text-xs px-2 py-1 rounded border border-gray-300 bg-gray-50 hover:bg-yellow-200 disabled:opacity-50"
+                onClick={() => handleVote(row.id)}
+                disabled={votedIds.includes(row.id)}
+                className={`btn btn-primary ${
+                  bumpedId === row.id ? "animate-bump" : ""
+                }`}
               >
-                {localStorage.getItem(`voted_${item.id}`) ? '¡Gracias! 👍' : 'Me gusta 👍'}
+                👍 {votedIds.includes(row.id) ? "¡Gracias!" : "Me gusta"}
               </button>
+              <span className="chip">+{row.score}</span>
             </div>
-          ))}
-        </div>
-      </div>
-    </main>
+          </div>
+        ))}
+      </section>
+    </div>
   );
 }
