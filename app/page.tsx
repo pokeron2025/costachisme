@@ -1,116 +1,217 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
-export default function Home() {
-  // Estado local para pruebas (sin base de datos todavía)
-  const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
-  const [feed, setFeed] = useState<any[]>([
-    { id: 1, title: 'Ejemplo de rumor', content: 'Este es un rumor de prueba', barrio: 'Centro', votos: 5 },
-    { id: 2, title: 'Otro rumor', content: 'Otro texto de ejemplo', barrio: 'Colonia Norte', votos: 2 },
-  ]);
-  const [msg, setMsg] = useState<string | null>(null);
+// --- Config Supabase ---
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
-  };
+// --- Tipos ---
+type Submission = {
+  id: string;
+  title: string;
+  content: string;
+  location?: string;
+  image_url?: string;
+  score: number;
+  created_at: string;
+};
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (form.title.length < 5 || form.content.length < 12) {
-      setMsg('⚠️ Revisa los campos: el título mínimo 5 caracteres y el texto mínimo 12.');
-      return;
-    }
+// --- Funciones helpers ---
+function getVoterId() {
+  const key = "voter-id";
+  let v = localStorage.getItem(key);
+  if (!v) {
+    v = crypto.randomUUID();
+    localStorage.setItem(key, v);
+  }
+  return v;
+}
+function alreadyLiked(id: string) {
+  return localStorage.getItem(`liked:${id}`) === "1";
+}
+function markLiked(id: string) {
+  localStorage.setItem(`liked:${id}`, "1");
+}
 
-    // Simulación: agregar rumor al feed
-    const nuevo = {
-      id: Date.now(),
-      title: form.title,
-      content: form.content,
-      barrio: form.barrio,
-      votos: 0,
+export default function HomePage() {
+  const [feed, setFeed] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState<string | null>(null);
+  const [voter, setVoter] = useState<string | null>(null);
+
+  // Formulario
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [location, setLocation] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+
+  // Cargar voterId
+  useEffect(() => {
+    try {
+      setVoter(getVoterId());
+    } catch {}
+  }, []);
+
+  // Cargar feed
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("submissions")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) setFeed(data as Submission[]);
+      setLoading(false);
     };
-    setFeed([nuevo, ...feed]);
-    setForm({ title: '', content: '', barrio: '', imagen_url: '' });
-    setMsg('✅ Rumor enviado (modo demo, no guardado en BD).');
-  };
+    load();
+  }, []);
 
-  const handleVote = (id: number) => {
-    setFeed(feed.map(item => item.id === id ? { ...item, votos: item.votos + 1 } : item));
-  };
+  // Enviar rumor
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (title.length < 5 || content.length < 12) return;
+
+    const { data, error } = await supabase.from("submissions").insert([
+      {
+        title,
+        content,
+        location,
+        image_url: imageUrl,
+        score: 0,
+      },
+    ]);
+
+    if (!error) {
+      setTitle("");
+      setContent("");
+      setLocation("");
+      setImageUrl("");
+      // refrescar feed
+      const { data: fresh } = await supabase
+        .from("submissions")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (fresh) setFeed(fresh as Submission[]);
+    }
+  }
+
+  // Votar
+  async function handleVote(id: string) {
+    if (!voter) return;
+    if (alreadyLiked(id)) return;
+    if (sending === id) return;
+    setSending(id);
+
+    const res = await fetch("/api/vote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, voter }),
+    });
+
+    const json = await res.json().catch(() => ({}));
+    setSending(null);
+
+    if (res.ok && json?.ok) {
+      markLiked(id);
+      setFeed((cur) =>
+        cur.map((x) =>
+          x.id === id ? { ...x, score: x.score + 1 } : x
+        )
+      );
+    }
+  }
 
   return (
-    <main className="mx-auto max-w-5xl p-4">
-      <h1 className="text-3xl font-bold text-center mb-6 text-[#2f7f6d]">Lo más reciente (aprobado)</h1>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Formulario */}
-        <form onSubmit={handleSubmit} className="bg-white shadow p-4 rounded-lg">
-          <h2 className="text-lg font-semibold mb-2">Enviar Rumor</h2>
-
+    <main className="max-w-5xl mx-auto p-4 grid md:grid-cols-2 gap-6">
+      {/* Formulario */}
+      <section className="rounded-lg border p-4 space-y-3">
+        <h2 className="font-semibold text-lg">Enviar Rumor</h2>
+        <form onSubmit={handleSubmit} className="space-y-2">
           <input
-            name="title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
             placeholder="Ej. Se dice que..."
-            value={form.title}
-            onChange={handleChange}
-            className="w-full border p-2 rounded mb-2"
+            className="w-full border rounded p-2"
+            minLength={5}
+            maxLength={80}
+            required
           />
-          <p className="text-xs text-gray-500 mb-2">Mínimo 5 y máximo 80 caracteres.</p>
-
           <textarea
-            name="content"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
             placeholder="Sin nombres ni datos personales. Enfócate en situaciones."
-            value={form.content}
-            onChange={handleChange}
-            className="w-full border p-2 rounded mb-2"
+            className="w-full border rounded p-2"
+            minLength={12}
+            maxLength={400}
+            required
           />
-          <p className="text-xs text-gray-500 mb-2">Mínimo 12 y máximo 400 caracteres.</p>
-
           <input
-            name="barrio"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
             placeholder="Barrio/Colonia (opcional)"
-            value={form.barrio}
-            onChange={handleChange}
-            className="w-full border p-2 rounded mb-2"
+            className="w-full border rounded p-2"
           />
-
           <input
-            name="imagen_url"
+            value={imageUrl}
+            onChange={(e) => setImageUrl(e.target.value)}
             placeholder="URL de imagen (opcional)"
-            value={form.imagen_url}
-            onChange={handleChange}
-            className="w-full border p-2 rounded mb-4"
+            className="w-full border rounded p-2"
           />
-
-          {msg && <p className="text-sm text-red-500 mb-2">{msg}</p>}
-          <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded">
+          <button
+            type="submit"
+            className="px-4 py-2 bg-green-600 text-white rounded"
+          >
             Enviar
           </button>
         </form>
+      </section>
 
-        {/* Feed de rumores */}
-        <div className="space-y-4">
-          {feed.map(item => (
-            <div key={item.id} className="bg-white shadow p-4 rounded-lg">
+      {/* Feed */}
+      <section className="space-y-4">
+        <h2 className="font-semibold text-lg">Lo más reciente (aprobado)</h2>
+        {loading && <p>Cargando...</p>}
+        {!loading &&
+          feed.map((item) => (
+            <div
+              key={item.id}
+              className="border rounded-lg p-4 space-y-2"
+            >
+              <p className="text-xs text-gray-500">
+                {new Date(item.created_at).toLocaleString()}
+              </p>
               <h3 className="font-bold">{item.title}</h3>
-              <p className="text-sm text-gray-600 mb-2">{item.content}</p>
-              {item.barrio && (
-                <p className="text-xs text-gray-500">📍 {item.barrio}</p>
+              <p>{item.content}</p>
+              {item.location && (
+                <p className="text-sm text-gray-600">📍 {item.location}</p>
               )}
-              <div className="flex items-center mt-2 space-x-2">
-                <span>👍 {item.votos} votos</span>
+              {item.image_url && (
+                <img
+                  src={item.image_url}
+                  alt="rumor"
+                  className="rounded-lg max-h-60"
+                />
+              )}
+              <div className="flex items-center gap-2">
                 <button
-                  type="button"
                   onClick={() => handleVote(item.id)}
-                  className="text-xs bg-yellow-200 px-2 py-1 rounded"
+                  disabled={alreadyLiked(item.id) || sending === item.id}
+                  className={`px-3 py-1 rounded border ${
+                    alreadyLiked(item.id)
+                      ? "opacity-60 cursor-not-allowed"
+                      : "hover:bg-gray-50"
+                  }`}
                 >
-                  ¡Me gusta!
+                  {alreadyLiked(item.id) ? "¡Gracias! 👍" : "👍 Votar"}
                 </button>
+                <span>{item.score} votos</span>
               </div>
             </div>
           ))}
-        </div>
-      </div>
+      </section>
     </main>
   );
 }
