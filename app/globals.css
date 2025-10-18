@@ -114,3 +114,43 @@ html, body { background: var(--bg); color: var(--fg); }
   will-change: transform;
   transition: transform 0.3s ease, box-shadow 0.25s ease;
 }
+/* ===== Variables de tema día/noche ===== */
+:root {
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --muted-fg: #475569;
+  --card: #ffffff;
+  --border: #e5e7eb;
+
+  /* Header de DÍA: fondo blanco, texto oscuro */
+  --header-bg: #ffffff;
+  --header-fg: #0f172a;
+}
+
+.theme-night {
+  --bg: #0b1220;
+  --fg: #e6edf3;
+  --muted-fg: #9fb0bf;
+  --card: #0f172a;
+  --border: #1f2937;
+
+  /* Header de NOCHE: fondo oscuro, texto claro */
+  --header-bg: #0f172a;
+  --header-fg: #e6edf3;
+}
+
+/* Aplicación global */
+html, body { background: var(--bg); color: var(--fg); }
+.theme-night .bg-white { background-color: var(--card) !important; }
+.theme-night .border { border-color: var(--border) !important; }
+
+/* Sombra al scrollear y ocultar al bajar */
+.is-scrolled {
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+}
+.header-hidden { transform: translateY(-100%); }
+
+#site-header {
+  will-change: transform;
+  transition: transform 0.3s ease, box-shadow 0.25s ease, color 0.25s ease, background-color 0.25s ease;
+}
