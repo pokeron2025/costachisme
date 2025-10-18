@@ -1,4 +1,3 @@
-// app/api/reaction-totals/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -25,11 +24,12 @@ const ZERO: Totals = {
   sad_count: 0,
 };
 
+// 👇 tip correcto de params en Next.js 15
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const id = params.id;
+  const { id } = await context.params; // aquí se resuelve params
 
   const { data, error } = await supabase
     .from('reaction_totals')
@@ -37,12 +37,11 @@ export async function GET(
       'like_count, dislike_count, haha_count, wow_count, angry_count, sad_count'
     )
     .eq('submission_id', id)
-    .maybeSingle(); // permite nulo si aún no hay reacciones
+    .maybeSingle();
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  const totals: Totals = data ?? ZERO;
-  return NextResponse.json({ ok: true, totals });
+  return NextResponse.json({ ok: true, totals: data ?? ZERO });
 }
