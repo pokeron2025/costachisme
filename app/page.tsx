@@ -33,14 +33,8 @@ type FeedItem = Submission & {
 // ---------- Validación del formulario ----------
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z
-    .string()
-    .min(5, { message: 'El título debe tener al menos 5 caracteres.' })
-    .max(80, { message: 'El título no puede superar 80 caracteres.' }),
-  content: z
-    .string()
-    .min(12, { message: 'El texto debe tener al menos 12 caracteres.' })
-    .max(400, { message: 'El texto no puede superar 400 caracteres.' }),
+  title: z.string().min(5, { message: 'El título debe tener al menos 5 caracteres.' }).max(80),
+  content: z.string().min(12, { message: 'El texto debe tener al menos 12 caracteres.' }).max(400),
   barrio: z.string().max(60).optional().or(z.literal('')),
   imagen_url: z.string().url().optional().or(z.literal('')),
 });
@@ -54,7 +48,7 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-// Pseudo-identidad del votante (cliente)
+// ---------- Helpers ----------
 function getVoter() {
   const k = '__voter_id__';
   let v = typeof window !== 'undefined' ? localStorage.getItem(k) : null;
@@ -65,7 +59,6 @@ function getVoter() {
   return v ?? 'anon';
 }
 
-// Guardar última reacción local para no spamear clicks en sesión
 function getLocalReacted(submissionId: string) {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('__reacted__') || '{}';
@@ -87,14 +80,38 @@ export default function Home() {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const [form, setForm] = useState({
-    title: '',
-    content: '',
-    barrio: '',
-    imagen_url: '',
-  });
+  const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
 
-  // Cargar feed inicial
+  // ----------- Helpers para refrescar datos individuales -----------
+  async function refreshOne(submissionId: string) {
+    try {
+      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok && j.data) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.data } : it))
+        );
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  async function fetchComments(submissionId: string) {
+    try {
+      const r = await fetch(`/api/comments/${submissionId}`);
+      const j = await r.json();
+      if (j.ok) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
+        );
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  // ----------- Cargar feed inicial -----------
   async function load() {
     try {
       const r = await fetch('/api/list', { cache: 'no-store' });
@@ -113,7 +130,6 @@ export default function Home() {
           comments: [],
         }));
         setFeed(normalized);
-        // precargar comentarios
         normalized.forEach((it) => fetchComments(it.id));
       } else {
         setMsg(j.error || 'No se pudo cargar el feed.');
@@ -127,19 +143,34 @@ export default function Home() {
     load();
   }, []);
 
-  // Enviar rumor/reporte
+  // ----------- Suscripción realtime -----------
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('public:reactions-comments')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
+        const sid =
+          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) refreshOne(sid);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
+        const sid =
+          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) fetchComments(sid);
+      })
+      .subscribe();
+
+    return () => {
+      supabaseBrowser.removeChannel(channel);
+    };
+  }, []);
+
+  // ----------- Enviar rumor/reporte -----------
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
     try {
-      const payload = {
-        category: tab,
-        title: form.title,
-        content: form.content,
-        barrio: form.barrio,
-        imagen_url: form.imagen_url,
-      };
+      const payload = { category: tab, ...form };
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
         setMsg(parsed.error.errors[0].message);
@@ -153,9 +184,9 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
+        setMsg(j.error ?? 'Ocurrió un error.');
       } else {
-        setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
+        setMsg('¡Enviado!');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
         load();
       }
@@ -166,22 +197,7 @@ export default function Home() {
     }
   }
 
-  // Refresca SOLO los totales de una publicación
-  async function refreshOne(submissionId: string) {
-    try {
-      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
-      const j = await r.json();
-      if (j.ok && j.data) {
-        setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.data } : it))
-        );
-      }
-    } catch {
-      /* silent */
-    }
-  }
-
-  // Hacer reacción
+  // ----------- Reaccionar -----------
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
     const already = getLocalReacted(submissionId);
@@ -200,66 +216,17 @@ export default function Home() {
         return;
       }
 
-      // actualiza desde backend
+      // asegura los números desde backend
       await refreshOne(submissionId);
       setLocalReacted(submissionId, tag);
     } catch (err: any) {
-      alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
-    }
-  }
-
-  // Comentarios
-  async function fetchComments(submissionId: string) {
-    try {
-      const r = await fetch(`/api/comments/${submissionId}`);
-      const j = await r.json();
-      if (j.ok) {
-        setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
-        );
-      }
-    } catch {
-      /* silent */
-    }
-  }
-
-  async function submitComment(submissionId: string, body: string, nickname: string | undefined) {
-    const r = await fetch(`/api/comments/${submissionId}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ body, nickname }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      fetchComments(submissionId);
-      return true;
-    } else {
-      alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
-      return false;
+      alert('⚠️ Fallo de red: ' + (err?.message || 'sin detalle'));
     }
   }
 
   const voterId = useMemo(() => getVoter(), []);
 
-  // Realtime
-  useEffect(() => {
-    const channel = supabaseBrowser
-      .channel('public:reactions-comments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
-        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-        if (sid) refreshOne(sid);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
-        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-        if (sid) fetchComments(sid);
-      })
-      .subscribe();
-
-    return () => {
-      supabaseBrowser.removeChannel(channel);
-    };
-  }, []);
-
+  // ----------- Render -----------
   return (
     <main className="mx-auto max-w-5xl p-4">
       {/* Tabs */}
@@ -298,16 +265,18 @@ export default function Home() {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               />
+              <p className="text-xs text-gray-500 mt-1">Mínimo 5 y máximo 80 caracteres.</p>
             </div>
 
             <div>
               <label className="block text-sm mb-1">Texto</label>
               <textarea
                 className="w-full rounded-lg border px-3 py-2 h-32"
-                placeholder="Sin nombres ni datos personales. Enfócate en situaciones."
+                placeholder="Sin nombres ni datos personales."
                 value={form.content}
                 onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
               />
+              <p className="text-xs text-gray-500 mt-1">Mínimo 12 y máximo 400 caracteres.</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -348,7 +317,7 @@ export default function Home() {
           <h2 className="text-lg font-semibold">Lo más reciente (aprobado)</h2>
 
           {feed.length === 0 && (
-            <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
+            <div className="text-sm text-gray-500">Aún no hay publicaciones.</div>
           )}
 
           {feed.map((it) => {
@@ -389,8 +358,13 @@ export default function Home() {
                   submissionId={it.id}
                   comments={it.comments ?? []}
                   onAdd={async (body, nickname) => {
-                    const ok = await submitComment(it.id, body, nickname);
-                    return ok;
+                    const ok = await fetch(`/api/comments/${it.id}`, {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ body, nickname }),
+                    }).then((r) => r.json());
+                    if (ok) fetchComments(it.id);
+                    return true;
                   }}
                 />
               </article>
@@ -448,7 +422,7 @@ function CommentsBlock({
           <form onSubmit={handleSend} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
             <input
               className="rounded-lg border px-3 py-2"
-              placeholder="Escribe un comentario (anónimo)…"
+              placeholder="Escribe un comentario…"
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
@@ -468,4 +442,21 @@ function CommentsBlock({
           </form>
 
           <ul className="space-y-2">
-            {comments.map((c)
+            {comments.map((c) => (
+              <li key={c.id} className="text-sm rounded-lg bg-gray-50 p-2">
+                <div className="text-xs text-gray-500 mb-1">
+                  {c.nickname ? c.nickname : 'Anónimo'} ·{' '}
+                  {new Date(c.created_at).toLocaleString()}
+                </div>
+                <div>{c.body}</div>
+              </li>
+            ))}
+            {comments.length === 0 && (
+              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
