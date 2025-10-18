@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import { z } from 'zod';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 
-/* =========================
+/* ===========================
    Tipos
-========================= */
+=========================== */
 type Submission = {
   id: string;
   created_at: string;
@@ -27,25 +27,35 @@ type ReactionTotals = {
   sad_count: number;
 };
 
-type FeedItem = Submission & {
-  totals: ReactionTotals;
-  comments?: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
+type Comment = {
+  id: string;
+  body: string;
+  nickname: string | null;
+  created_at: string;
 };
 
-/* =========================
-   Validación formulario
-========================= */
+type FeedItem = Submission & {
+  totals: ReactionTotals;
+  comments?: Comment[];
+};
+
+/* ===========================
+   Validación
+=========================== */
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(5).max(80),
-  content: z.string().min(12).max(400),
+  title: z
+    .string()
+    .min(5, { message: 'El título debe tener al menos 5 caracteres.' })
+    .max(80, { message: 'El título no puede superar 80 caracteres.' }),
+  content: z
+    .string()
+    .min(12, { message: 'El texto debe tener al menos 12 caracteres.' })
+    .max(400, { message: 'El texto no puede superar 400 caracteres.' }),
   barrio: z.string().max(60).optional().or(z.literal('')),
   imagen_url: z.string().url().optional().or(z.literal('')),
 });
 
-/* =========================
-   Reacciones disponibles
-========================= */
 const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string; tag: string }> = [
   { key: 'like_count', code: '👍', label: 'Me gusta', tag: 'like' },
   { key: 'dislike_count', code: '👎', label: 'No me gusta', tag: 'dislike' },
@@ -55,17 +65,18 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-/* =========================
-   Identidad local y “antispam” de sesión
-========================= */
+/* ===========================
+   Identidad y cache local
+=========================== */
 function getVoter() {
   const k = '__voter_id__';
-  let v = typeof window !== 'undefined' ? localStorage.getItem(k) : null;
-  if (!v && typeof window !== 'undefined') {
+  if (typeof window === 'undefined') return 'anon';
+  let v = localStorage.getItem(k);
+  if (!v) {
     v = `anon_${Math.random().toString(36).slice(2)}`;
     localStorage.setItem(k, v);
   }
-  return v ?? 'anon';
+  return v;
 }
 
 function getLocalReacted(submissionId: string) {
@@ -82,116 +93,123 @@ function setLocalReacted(submissionId: string, reaction: string) {
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
-/* =========================
+/* ===========================
    Página
-========================= */
+=========================== */
 export default function Home() {
-  const [tab, setTab] = useState<'RUMOR' | 'REPORTE'>('RUMOR');
-  const [loading, setLoading] = useState(false);
-  const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
+  const [tab, setTab] = React.useState<'RUMOR' | 'REPORTE'>('RUMOR');
+  const [loading, setLoading] = React.useState(false);
+  const [feed, setFeed] = React.useState<FeedItem[]>([]);
+  const [msg, setMsg] = React.useState<string | null>(null);
 
-  /* --- Realtime: debounce de refresco global (fallback) --- */
-  const refreshTimer = useRef<NodeJS.Timeout | null>(null);
-  const scheduleRefreshAll = () => {
-    if (refreshTimer.current) return;
-    refreshTimer.current = setTimeout(() => {
-      refreshTimer.current = null;
-      load();
-    }, 250);
-  };
+  const [form, setForm] = React.useState({
+    title: '',
+    content: '',
+    barrio: '',
+    imagen_url: '',
+  });
 
-  /* --- Pide totales para una publicación específica y actualiza solo esa tarjeta --- */
-  async function refreshOne(id: string) {
+  /* ---------- Helpers de red ---------- */
+
+  // Carga el feed completo (aprobados + totales)
+  async function load() {
     try {
-      const r = await fetch(`/api/reaction-totals/${id}`, { cache: 'no-store' });
+      const r = await fetch('/api/list', { cache: 'no-store' });
       const j = await r.json();
-      if (j?.ok && j?.totals) {
-        setFeed(curr => curr.map(it => (it.id === id ? { ...it, totals: j.totals as ReactionTotals } : it)));
+      if (!j.ok) {
+        setMsg(j.error || 'No se pudo cargar el feed.');
+        return;
       }
-    } catch {
-      /* silent */
+      const normalized: FeedItem[] = (j.data as Submission[]).map((s: any) => ({
+        ...s,
+        totals: {
+          like_count: s.like_count ?? 0,
+          dislike_count: s.dislike_count ?? 0,
+          haha_count: s.haha_count ?? 0,
+          wow_count: s.wow_count ?? 0,
+          angry_count: s.angry_count ?? 0,
+          sad_count: s.sad_count ?? 0,
+        },
+        comments: [],
+      }));
+      setFeed(normalized);
+      // Precargar comentarios de cada item (no bloquea UI)
+      normalized.forEach((it) => fetchComments(it.id));
+    } catch (e: any) {
+      setMsg(e?.message || 'Error de red al cargar el feed.');
     }
   }
 
-  /* --- Suscripción realtime a reacciones y comentarios --- */
-  useEffect(() => {
+  // Refresca SOLO los totales de reacciones para un submission
+  async function refreshOne(submissionId: string) {
+    try {
+      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (!j.ok || !j.data) return;
+      const totals: ReactionTotals = j.data;
+      setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, totals } : it)));
+    } catch {
+      /* noop */
+    }
+  }
+
+  // Carga comentarios de un submission
+  async function fetchComments(submissionId: string) {
+    try {
+      const r = await fetch(`/api/comments/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok) {
+        setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
+  React.useEffect(() => {
+    load();
+  }, []);
+
+  /* ---------- Realtime con debounce ---------- */
+
+  const refreshTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const scheduleRefresh = React.useCallback((submissionId: string) => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      refreshOne(submissionId);
+    }, 250);
+  }, []);
+
+  React.useEffect(() => {
     const channel = supabaseBrowser
       .channel('public:reactions-comments')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'reactions' },
         (payload) => {
-          const sid =
-            (payload.new as any)?.submission_id ??
-            (payload.old as any)?.submission_id;
-          if (sid) {
-            // refresca SOLO esa tarjeta
-            refreshOne(sid);
-          } else {
-            scheduleRefreshAll();
-          }
+          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+          if (sid) scheduleRefresh(sid);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'comments' },
         (payload) => {
-          const sid =
-            (payload.new as any)?.submission_id ??
-            (payload.old as any)?.submission_id;
-          if (sid) {
-            fetchComments(sid);
-          }
+          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+          if (sid) fetchComments(sid);
         }
       )
       .subscribe();
 
     return () => {
       supabaseBrowser.removeChannel(channel);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [scheduleRefresh]);
 
-  /* --- Cargar feed inicial (con totales desde el server y confirmación por item) --- */
-  async function load() {
-    try {
-      const r = await fetch('/api/list', { cache: 'no-store' });
-      const j = await r.json();
-      if (j.ok) {
-        const normalized: FeedItem[] = (j.data as Submission[]).map((s) => ({
-          ...s,
-          totals: {
-            like_count: (s as any).like_count ?? 0,
-            dislike_count: (s as any).dislike_count ?? 0,
-            haha_count: (s as any).haha_count ?? 0,
-            wow_count: (s as any).wow_count ?? 0,
-            angry_count: (s as any).angry_count ?? 0,
-            sad_count: (s as any).sad_count ?? 0,
-          },
-          comments: [],
-        }));
-        setFeed(normalized);
+  /* ---------- Envío del formulario ---------- */
 
-        // Confirmación por publicación (evita “volver a 0” si el join del feed no trajo algo)
-        normalized.forEach((it) => {
-          refreshOne(it.id);
-          fetchComments(it.id);
-        });
-      } else {
-        setMsg(j.error || 'No se pudo cargar el feed.');
-      }
-    } catch (e: any) {
-      setMsg(e?.message || 'Error de red al cargar el feed.');
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  /* --- Enviar rumor/reporte --- */
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -207,7 +225,6 @@ export default function Home() {
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
         setMsg(parsed.error.errors[0].message);
-        setLoading(false);
         return;
       }
       const r = await fetch('/api/submit', {
@@ -217,7 +234,7 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos (mínimos y máximimos).');
       } else {
         setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
@@ -230,13 +247,32 @@ export default function Home() {
     }
   }
 
-  /* --- Reaccionar --- */
+  /* ---------- Reaccionar ---------- */
+
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
-
-    // Evita re-clicks idénticos en la misma sesión
     const already = getLocalReacted(submissionId);
-    if (already === tag) return;
+    if (already === tag) return; // evita doble click de la misma reacción
+
+    // optimismo: suma local mientras responde el server
+    setFeed((curr) =>
+      curr.map((it) =>
+        it.id === submissionId
+          ? {
+              ...it,
+              totals: {
+                ...it.totals,
+                ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
+                ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
+                ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
+                ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
+                ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
+                ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
+              },
+            }
+          : it
+      )
+    );
 
     try {
       const res = await fetch('/api/react', {
@@ -244,63 +280,32 @@ export default function Home() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: submissionId, reaction: tag, voter }),
       });
-
       const j = await res.json();
       if (!res.ok || !j.ok) {
         alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
+        // revertir optimismo si falló
+        await refreshOne(submissionId);
         return;
       }
-
-      // Preferimos usar los totales frescos del backend
+      // si el server retornó totales, usa fuente de verdad
       if (j.totals) {
         setFeed((curr) =>
           curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
         );
       } else {
-        // Fallback optimista (si por alguna razón no llegó totals)
-        setFeed((curr) =>
-          curr.map((it) =>
-            it.id === submissionId
-              ? {
-                  ...it,
-                  totals: {
-                    ...it.totals,
-                    ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
-                    ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
-                    ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
-                    ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
-                    ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
-                    ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
-                  },
-                }
-              : it
-          )
-        );
+        // si no, refresca desde API de totales
+        await refreshOne(submissionId);
       }
-
       setLocalReacted(submissionId, tag);
-
-      // Y aseguramos sincronía con la base
-      refreshOne(submissionId);
     } catch (err: any) {
       alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
+      await refreshOne(submissionId);
     }
   }
 
-  /* --- Comentarios: leer y enviar --- */
-  async function fetchComments(submissionId: string) {
-    try {
-      const r = await fetch(`/api/comments/${submissionId}`, { cache: 'no-store' });
-      const j = await r.json();
-      if (j.ok) {
-        setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
-      }
-    } catch {
-      /* silent */
-    }
-  }
+  /* ---------- Comentar ---------- */
 
-  async function submitComment(submissionId: string, body: string, nickname: string | undefined) {
+  async function submitComment(submissionId: string, body: string, nickname?: string) {
     const r = await fetch(`/api/comments/${submissionId}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -316,11 +321,8 @@ export default function Home() {
     }
   }
 
-  const voterId = useMemo(() => getVoter(), []);
+  /* ---------- UI ---------- */
 
-  /* =========================
-     UI
-  ========================= */
   return (
     <main className="mx-auto max-w-5xl p-4">
       {/* Tabs */}
@@ -342,9 +344,7 @@ export default function Home() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FORM */}
         <section className="rounded-2xl border p-4">
-          <h2 className="text-lg font-semibold mb-4">
-            Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
-          </h2>
+          <h2 className="text-lg font-semibold mb-4">Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}</h2>
 
           <form onSubmit={submit} className="space-y-3">
             <div>
@@ -410,21 +410,21 @@ export default function Home() {
             <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
           )}
 
-          {feed.map((it) => {
-            const reacted = getLocalReacted(it.id);
-            return (
-              <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white">
-                <div className="text-xs text-gray-500">{new Date(it.created_at).toLocaleString()}</div>
-                <div>
-                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
-                  <h3 className="font-semibold">{it.title}</h3>
-                  <p className="text-sm mt-1">{it.content}</p>
-                  {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
-                </div>
+          {feed.map((it) => (
+            <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white">
+              <div className="text-xs text-gray-500">{new Date(it.created_at).toLocaleString()}</div>
+              <div>
+                <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
+                <h3 className="font-semibold">{it.title}</h3>
+                <p className="text-sm mt-1">{it.content}</p>
+                {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
+              </div>
 
-                {/* Reacciones */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {REACTIONS.map((r) => (
+              {/* Reacciones */}
+              <div className="flex flex-wrap items-center gap-2">
+                {REACTIONS.map((r) => {
+                  const reacted = getLocalReacted(it.id);
+                  return (
                     <button
                       key={r.key}
                       onClick={() => react(it.id, r.tag)}
@@ -436,18 +436,18 @@ export default function Home() {
                       <span>{r.code}</span>
                       <span>{(it.totals as any)[r.key]}</span>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
+              </div>
 
-                {/* Comentarios */}
-                <CommentsBlock
-                  submissionId={it.id}
-                  comments={it.comments ?? []}
-                  onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
-                />
-              </article>
-            );
-          })}
+              {/* Comentarios */}
+              <CommentsBlock
+                submissionId={it.id}
+                comments={it.comments ?? []}
+                onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
+              />
+            </article>
+          ))}
         </section>
       </div>
 
@@ -459,22 +459,22 @@ export default function Home() {
   );
 }
 
-/* =========================
+/* ===========================
    Bloque de comentarios
-========================= */
+=========================== */
 function CommentsBlock({
   submissionId,
   comments,
   onAdd,
 }: {
   submissionId: string;
-  comments: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
+  comments: Comment[];
   onAdd: (body: string, nickname?: string) => Promise<boolean>;
 }) {
-  const [open, setOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [body, setBody] = useState('');
-  const [nick, setNick] = useState('');
+  const [open, setOpen] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+  const [body, setBody] = React.useState('');
+  const [nick, setNick] = React.useState('');
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -534,4 +534,3 @@ function CommentsBlock({
     </div>
   );
 }
-```0
