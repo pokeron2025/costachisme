@@ -15,7 +15,7 @@ export const metadata = {
   description:
     "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano.",
   icons: {
-    icon: "/logo-icon.svg", // cambia a /logo.svg si quieres usar el logo abstracto también como favicon
+    icon: "/logo-icon.svg", // o "/logo.svg" si quieres usar el abstracto
   },
 };
 
@@ -26,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={`${poppins.className} min-h-screen`}>
+      <body className={`${poppins.className} min-h-screen flex flex-col`}>
         {/* HEADER */}
         <header className="sticky top-0 z-30 border-b border-black/5 dark:border-white/10 bg-brand-500/95 text-white backdrop-blur supports-[backdrop-filter]:bg-brand-500/80">
           <div className="container-narrow flex items-center justify-between gap-3 p-3">
@@ -56,11 +56,39 @@ export default function RootLayout({
         </header>
 
         {/* CONTENIDO */}
-        <main className="container-narrow mx-auto p-4">{children}</main>
+        <main className="container-narrow mx-auto p-4 flex-1">{children}</main>
 
         {/* FOOTER */}
-        <footer className="container-narrow mx-auto px-4 pb-10 pt-6 text-center text-sm opacity-70">
-          Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
+        <footer className="border-t border-black/5 dark:border-white/10 mt-8">
+          <div className="container-narrow mx-auto px-4 py-6 flex flex-col md:flex-row items-center justify-between gap-4 text-sm opacity-80">
+            {/* Izquierda */}
+            <p className="text-center md:text-left">
+              © {new Date().getFullYear()} Costachisme · Hecho con ❤ en
+              Salina Cruz
+            </p>
+
+            {/* Derecha: enlaces */}
+            <nav className="flex gap-4 text-xs md:text-sm">
+              <a
+                href="#"
+                className="hover:underline hover:text-brand-400 transition"
+              >
+                Contacto
+              </a>
+              <a
+                href="#"
+                className="hover:underline hover:text-brand-400 transition"
+              >
+                Aviso de Privacidad
+              </a>
+              <a
+                href="#"
+                className="hover:underline hover:text-brand-400 transition"
+              >
+                Términos y Condiciones
+              </a>
+            </nav>
+          </div>
         </footer>
       </body>
     </html>
