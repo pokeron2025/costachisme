@@ -123,6 +123,31 @@ function totalReactions(t: ReactionTotals) {
 
 /* ========================= Mini componentes (UI + Animaciones) ========================= */
 
+function Chip({
+  active,
+  children,
+  onClick,
+  title,
+}: {
+  active?: boolean;
+  children: React.ReactNode;
+  onClick?: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`px-3 py-1 rounded-full border text-sm ${
+        active ? 'bg-emerald-600 text-white border-emerald-700' : 'bg-white hover:bg-gray-50'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function ReactionButton({
   active,
   emoji,
@@ -185,12 +210,13 @@ export default function Home() {
   const [feed, setFeed] = React.useState<FeedItem[]>([]);
   const [msg, setMsg] = React.useState<string | null>(null);
 
-  // Controles de filtro/orden/búsqueda
-  const [query, setQuery] = React.useState('');
+  // Controles de filtro/orden/búsqueda (UI modernizada)
+  const [queryInput, setQueryInput] = React.useState(''); // input inmediato
+  const [query, setQuery] = React.useState(''); // query con debounce
   const [sortBy, setSortBy] = React.useState<'recent' | 'reactions' | 'comments'>('recent');
-  const [minReactions, setMinReactions] = React.useState(0);
-  const [minComments, setMinComments] = React.useState(0);
   const [onlyWithImage, setOnlyWithImage] = React.useState(false);
+  const [minReactionsChip, setMinReactionsChip] = React.useState<0 | 5>(0);
+  const [minCommentsChip, setMinCommentsChip] = React.useState<0 | 3>(0);
 
   const [form, setForm] = React.useState({
     title: '',
@@ -198,6 +224,12 @@ export default function Home() {
     barrio: '',
     imagen_url: '',
   });
+
+  /* ---------- Debounce de búsqueda ---------- */
+  React.useEffect(() => {
+    const t = setTimeout(() => setQuery(queryInput.trim().toLowerCase()), 250);
+    return () => clearTimeout(t);
+  }, [queryInput]);
 
   /* ---------- Carga de feed ---------- */
   async function load() {
@@ -279,7 +311,7 @@ export default function Home() {
   /* ---------- Realtime: reacciones y comentarios ---------- */
   React.useEffect(() => {
     const channel = supabaseBrowser
-      .channel('public:reactions-comments-v4')
+      .channel('public:reactions-comments-v5')
 
       // Reacciones -> refrescar solo la tarjeta
       .on(
@@ -451,122 +483,100 @@ export default function Home() {
 
   /* ---------- Derivados: lista filtrada/ordenada ---------- */
   const derived = React.useMemo(() => {
-    // 1) por categoría (tab)
     let list = feed.filter((it) => it.category === tab);
 
-    // 2) búsqueda
-    const q = query.trim().toLowerCase();
-    if (q) {
+    if (query) {
       list = list.filter((it) => {
         const hay =
-          it.title.toLowerCase().includes(q) ||
-          it.content.toLowerCase().includes(q) ||
-          (it.barrio || '').toLowerCase().includes(q);
+          it.title.toLowerCase().includes(query) ||
+          it.content.toLowerCase().includes(query) ||
+          (it.barrio || '').toLowerCase().includes(query);
         return hay;
       });
     }
 
-    // 3) sólo con imagen
-    if (onlyWithImage) {
-      list = list.filter((it) => !!it.imagen_url);
-    }
+    if (onlyWithImage) list = list.filter((it) => !!it.imagen_url);
+    if (minReactionsChip > 0) list = list.filter((it) => totalReactions(it.totals) >= minReactionsChip);
+    if (minCommentsChip > 0) list = list.filter((it) => (it.comments?.length || 0) >= minCommentsChip);
 
-    // 4) mínimos
-    if (minReactions > 0) {
-      list = list.filter((it) => totalReactions(it.totals) >= minReactions);
-    }
-    if (minComments > 0) {
-      list = list.filter((it) => (it.comments?.length || 0) >= minComments);
-    }
-
-    // 5) orden
     list = [...list].sort((a, b) => {
-      if (sortBy === 'recent') {
-        return +new Date(b.created_at) - +new Date(a.created_at);
-      }
-      if (sortBy === 'reactions') {
-        return totalReactions(b.totals) - totalReactions(a.totals);
-      }
-      // comments
+      if (sortBy === 'recent') return +new Date(b.created_at) - +new Date(a.created_at);
+      if (sortBy === 'reactions') return totalReactions(b.totals) - totalReactions(a.totals);
       const ac = a.comments?.length || 0;
       const bc = b.comments?.length || 0;
       return bc - ac;
     });
 
     return list;
-  }, [feed, tab, query, sortBy, minReactions, minComments, onlyWithImage]);
+  }, [feed, tab, query, sortBy, onlyWithImage, minReactionsChip, minCommentsChip]);
+
+  function clearFilters() {
+    setQueryInput('');
+    setQuery('');
+    setOnlyWithImage(false);
+    setMinReactionsChip(0);
+    setMinCommentsChip(0);
+    setSortBy('recent');
+  }
 
   /* ========================= Render ========================= */
 
   return (
     <main className="mx-auto max-w-6xl p-4">
-      {/* Tabs + Controles */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setTab('RUMOR')}
-            className={`px-4 py-2 rounded-full border ${
-              tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
-            }`}
-          >
-            Rumor 🧐
-          </button>
-          <button
-            onClick={() => setTab('REPORTE')}
-            className={`px-4 py-2 rounded-full border ${
-              tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
-            }`}
-          >
-            Buzón 📨
-          </button>
+      {/* Tabs */}
+      <div className="flex gap-2 mb-3">
+        <Chip active={tab === 'RUMOR'} onClick={() => setTab('RUMOR')}>Rumor 🧐</Chip>
+        <Chip active={tab === 'REPORTE'} onClick={() => setTab('REPORTE')}>Buzón 📨</Chip>
+      </div>
+
+      {/* Controles modernizados */}
+      <div className="rounded-2xl border p-3 mb-4 bg-white">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          {/* Búsqueda */}
+          <input
+            className="rounded-lg border px-3 py-2 w-full md:w-80"
+            placeholder="Buscar por título, texto o barrio…"
+            value={queryInput}
+            onChange={(e) => setQueryInput(e.target.value)}
+          />
+
+          {/* Orden */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">Ordenar:</span>
+            <Chip active={sortBy === 'recent'} onClick={() => setSortBy('recent')} title="Más recientes">⏱️ Recientes</Chip>
+            <Chip active={sortBy === 'reactions'} onClick={() => setSortBy('reactions')} title="Más reacciones">🔥 Reaccionados</Chip>
+            <Chip active={sortBy === 'comments'} onClick={() => setSortBy('comments')} title="Más comentarios">💬 Comentados</Chip>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <input
-            className="rounded-lg border px-3 py-2 w-60"
-            placeholder="Buscar por título, texto o barrio…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-
-          <select
-            className="rounded-lg border px-3 py-2"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            title="Ordenar por"
+        {/* Filtros rápidos */}
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <span className="text-xs text-gray-500">Filtros:</span>
+          <Chip active={onlyWithImage} onClick={() => setOnlyWithImage((v) => !v)}>🖼️ Con imagen</Chip>
+          <Chip
+            active={minReactionsChip === 5}
+            onClick={() => setMinReactionsChip((v) => (v === 5 ? 0 : 5))}
+            title="Mostrar publicaciones con 5+ reacciones"
           >
-            <option value="recent">Más recientes</option>
-            <option value="reactions">Más reaccionados</option>
-            <option value="comments">Más comentados</option>
-          </select>
+            ✋ 5+ reacciones
+          </Chip>
+          <Chip
+            active={minCommentsChip === 3}
+            onClick={() => setMinCommentsChip((v) => (v === 3 ? 0 : 3))}
+            title="Mostrar publicaciones con 3+ comentarios"
+          >
+            🗣️ 3+ comentarios
+          </Chip>
 
-          <input
-            type="number"
-            min={0}
-            className="rounded-lg border px-3 py-2 w-28"
-            placeholder="Mín. reacts"
-            value={minReactions}
-            onChange={(e) => setMinReactions(Number(e.target.value || 0))}
-            title="Mínimo de reacciones"
-          />
-          <input
-            type="number"
-            min={0}
-            className="rounded-lg border px-3 py-2 w-28"
-            placeholder="Mín. comments"
-            value={minComments}
-            onChange={(e) => setMinComments(Number(e.target.value || 0))}
-            title="Mínimo de comentarios"
-          />
-
-          <label className="flex items-center gap-2 text-sm px-2 py-2 border rounded-lg bg-white">
-            <input
-              type="checkbox"
-              checked={onlyWithImage}
-              onChange={(e) => setOnlyWithImage(e.target.checked)}
-            />
-            Solo con imagen
-          </label>
+          {(query || onlyWithImage || minReactionsChip || minCommentsChip || sortBy !== 'recent') && (
+            <button
+              className="ml-auto text-xs text-emerald-700 hover:underline"
+              onClick={clearFilters}
+              title="Quitar filtros"
+            >
+              Limpiar filtros
+            </button>
+          )}
         </div>
       </div>
 
@@ -577,7 +587,7 @@ export default function Home() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: 'spring', stiffness: 300, damping: 22 }}
-          className="rounded-2xl border p-4"
+          className="rounded-2xl border p-4 bg-white"
         >
           <h2 className="text-lg font-semibold mb-4">
             Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
@@ -850,7 +860,6 @@ async function submitComment(
   });
   const j = await r.json();
   if (j.ok) {
-    // El INSERT hará merge en realtime; confirmamos por si acaso:
     setTimeout(() => {
       fetch(`/api/comments/${submissionId}`).then(() => {});
     }, 150);
