@@ -1,43 +1,48 @@
 // app/api/reaction-totals/[id]/route.ts
-import { NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabase-server';
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+type Totals = {
+  like_count: number;
+  dislike_count: number;
+  haha_count: number;
+  wow_count: number;
+  angry_count: number;
+  sad_count: number;
+};
+
+const ZERO: Totals = {
+  like_count: 0,
+  dislike_count: 0,
+  haha_count: 0,
+  wow_count: 0,
+  angry_count: 0,
+  sad_count: 0,
+};
 
 export async function GET(
-  _request: Request,
-  context: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: { id: string } }
 ) {
-  const { id } = context.params;
+  const id = params.id;
 
-  // Ajusta el SELECT según cómo devuelves los totales.
-  // Si los totales vienen de la vista reaction_totals, consulta esa vista:
-  // const { data, error } = await supabaseServer
-  //   .from('reaction_totals')
-  //   .select('like_count,dislike_count,haha_count,wow_count,angry_count,sad_count')
-  //   .eq('submission_id', id)
-  //   .maybeSingle();
-
-  // Si los totales están “join-eados” en /api/list y quieres leer de submissions:
-  const { data, error } = await supabaseServer
+  const { data, error } = await supabase
     .from('reaction_totals')
     .select(
       'like_count, dislike_count, haha_count, wow_count, angry_count, sad_count'
     )
     .eq('submission_id', id)
-    .maybeSingle();
+    .maybeSingle(); // permite nulo si aún no hay reacciones
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  // Normaliza a ceros si aún no hay fila en la vista
-  const totals = data ?? {
-    like_count: 0,
-    dislike_count: 0,
-    haha_count: 0,
-    wow_count: 0,
-    angry_count: 0,
-    sad_count: 0,
-  };
-
-  return NextResponse.json({ ok: true, data: totals });
+  const totals: Totals = data ?? ZERO;
+  return NextResponse.json({ ok: true, totals });
 }
