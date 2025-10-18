@@ -4,9 +4,8 @@ import React from 'react';
 import { z } from 'zod';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 
-/* ===========================
-   Tipos
-=========================== */
+/* ========================= Tipos ========================= */
+
 type Submission = {
   id: string;
   created_at: string;
@@ -27,34 +26,22 @@ type ReactionTotals = {
   sad_count: number;
 };
 
-type Comment = {
-  id: string;
-  body: string;
-  nickname: string | null;
-  created_at: string;
-};
-
 type FeedItem = Submission & {
   totals: ReactionTotals;
-  comments?: Comment[];
+  comments?: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
 };
 
-/* ===========================
-   Validación
-=========================== */
+/* ==================== Validación del formulario ==================== */
+
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z
-    .string()
-    .min(5, { message: 'El título debe tener al menos 5 caracteres.' })
-    .max(80, { message: 'El título no puede superar 80 caracteres.' }),
-  content: z
-    .string()
-    .min(12, { message: 'El texto debe tener al menos 12 caracteres.' })
-    .max(400, { message: 'El texto no puede superar 400 caracteres.' }),
+  title: z.string().min(5).max(80),
+  content: z.string().min(12).max(400),
   barrio: z.string().max(60).optional().or(z.literal('')),
   imagen_url: z.string().url().optional().or(z.literal('')),
 });
+
+/* ========================= Constantes UI ========================= */
 
 const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string; tag: string }> = [
   { key: 'like_count', code: '👍', label: 'Me gusta', tag: 'like' },
@@ -65,9 +52,8 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-/* ===========================
-   Identidad y cache local
-=========================== */
+/* ========================= Helpers cliente ========================= */
+
 function getVoter() {
   const k = '__voter_id__';
   if (typeof window === 'undefined') return 'anon';
@@ -82,20 +68,30 @@ function getVoter() {
 function getLocalReacted(submissionId: string) {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('__reacted__') || '{}';
-  const map = JSON.parse(raw) as Record<string, string>;
-  return map[submissionId] ?? null;
+  try {
+    const map = JSON.parse(raw) as Record<string, string>;
+    return map[submissionId] ?? null;
+  } catch {
+    return null;
+  }
 }
+
 function setLocalReacted(submissionId: string, reaction: string) {
   if (typeof window === 'undefined') return;
   const raw = localStorage.getItem('__reacted__') || '{}';
-  const map = JSON.parse(raw) as Record<string, string>;
+  const map = (() => {
+    try {
+      return JSON.parse(raw) as Record<string, string>;
+    } catch {
+      return {} as Record<string, string>;
+    }
+  })();
   map[submissionId] = reaction;
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
-/* ===========================
-   Página
-=========================== */
+/* ========================= Página ========================= */
+
 export default function Home() {
   const [tab, setTab] = React.useState<'RUMOR' | 'REPORTE'>('RUMOR');
   const [loading, setLoading] = React.useState(false);
@@ -109,9 +105,7 @@ export default function Home() {
     imagen_url: '',
   });
 
-  /* ---------- Helpers de red ---------- */
-
-  // Carga el feed completo (aprobados + totales)
+  /* ---------- Carga de feed ---------- */
   async function load() {
     try {
       const r = await fetch('/api/list', { cache: 'no-store' });
@@ -120,49 +114,23 @@ export default function Home() {
         setMsg(j.error || 'No se pudo cargar el feed.');
         return;
       }
-      const normalized: FeedItem[] = (j.data as Submission[]).map((s: any) => ({
+      const normalized: FeedItem[] = (j.data as Submission[]).map((s) => ({
         ...s,
         totals: {
-          like_count: s.like_count ?? 0,
-          dislike_count: s.dislike_count ?? 0,
-          haha_count: s.haha_count ?? 0,
-          wow_count: s.wow_count ?? 0,
-          angry_count: s.angry_count ?? 0,
-          sad_count: s.sad_count ?? 0,
+          like_count: (s as any).like_count ?? 0,
+          dislike_count: (s as any).dislike_count ?? 0,
+          haha_count: (s as any).haha_count ?? 0,
+          wow_count: (s as any).wow_count ?? 0,
+          angry_count: (s as any).angry_count ?? 0,
+          sad_count: (s as any).sad_count ?? 0,
         },
         comments: [],
       }));
       setFeed(normalized);
-      // Precargar comentarios de cada item (no bloquea UI)
+      // opcional: precargar comentarios
       normalized.forEach((it) => fetchComments(it.id));
     } catch (e: any) {
       setMsg(e?.message || 'Error de red al cargar el feed.');
-    }
-  }
-
-  // Refresca SOLO los totales de reacciones para un submission
-  async function refreshOne(submissionId: string) {
-    try {
-      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
-      const j = await r.json();
-      if (!j.ok || !j.data) return;
-      const totals: ReactionTotals = j.data;
-      setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, totals } : it)));
-    } catch {
-      /* noop */
-    }
-  }
-
-  // Carga comentarios de un submission
-  async function fetchComments(submissionId: string) {
-    try {
-      const r = await fetch(`/api/comments/${submissionId}`, { cache: 'no-store' });
-      const j = await r.json();
-      if (j.ok) {
-        setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
-      }
-    } catch {
-      /* noop */
     }
   }
 
@@ -170,17 +138,37 @@ export default function Home() {
     load();
   }, []);
 
-  /* ---------- Realtime con debounce ---------- */
+  /* ---------- Refresh puntual desde Supabase (vista reaction_totals) ---------- */
+  async function refreshOne(submissionId: string) {
+    const { data, error } = await supabaseBrowser
+      .from('reaction_totals')
+      .select(
+        'like_count,dislike_count,haha_count,wow_count,angry_count,sad_count'
+      )
+      .eq('submission_id', submissionId)
+      .maybeSingle();
 
-  const refreshTimer = React.useRef<NodeJS.Timeout | null>(null);
-  const scheduleRefresh = React.useCallback((submissionId: string) => {
-    if (refreshTimer.current) return;
-    refreshTimer.current = setTimeout(() => {
-      refreshTimer.current = null;
-      refreshOne(submissionId);
-    }, 250);
-  }, []);
+    if (error) {
+      console.warn('refreshOne error', error);
+      return;
+    }
 
+    const totals: ReactionTotals =
+      data ?? {
+        like_count: 0,
+        dislike_count: 0,
+        haha_count: 0,
+        wow_count: 0,
+        angry_count: 0,
+        sad_count: 0,
+      };
+
+    setFeed((curr) =>
+      curr.map((it) => (it.id === submissionId ? { ...it, totals } : it))
+    );
+  }
+
+  /* ---------- Realtime: reacciones y comentarios ---------- */
   React.useEffect(() => {
     const channel = supabaseBrowser
       .channel('public:reactions-comments')
@@ -188,15 +176,19 @@ export default function Home() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'reactions' },
         (payload) => {
-          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-          if (sid) scheduleRefresh(sid);
+          const sid =
+            (payload.new as any)?.submission_id ??
+            (payload.old as any)?.submission_id;
+          if (sid) refreshOne(sid);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'comments' },
         (payload) => {
-          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+          const sid =
+            (payload.new as any)?.submission_id ??
+            (payload.old as any)?.submission_id;
           if (sid) fetchComments(sid);
         }
       )
@@ -204,12 +196,10 @@ export default function Home() {
 
     return () => {
       supabaseBrowser.removeChannel(channel);
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
-  }, [scheduleRefresh]);
+  }, []);
 
-  /* ---------- Envío del formulario ---------- */
-
+  /* ---------- Enviar rumor/reporte ---------- */
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -234,7 +224,7 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos (mínimos y máximimos).');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
       } else {
         setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
@@ -247,14 +237,13 @@ export default function Home() {
     }
   }
 
-  /* ---------- Reaccionar ---------- */
-
+  /* ---------- Hacer reacción (optimista + verificación) ---------- */
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
     const already = getLocalReacted(submissionId);
-    if (already === tag) return; // evita doble click de la misma reacción
+    if (already === tag) return;
 
-    // optimismo: suma local mientras responde el server
+    // Optimista: sube 1 al contador local antes de la respuesta
     setFeed((curr) =>
       curr.map((it) =>
         it.id === submissionId
@@ -263,7 +252,9 @@ export default function Home() {
               totals: {
                 ...it.totals,
                 ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
-                ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
+                ...(tag === 'dislike'
+                  ? { dislike_count: it.totals.dislike_count + 1 }
+                  : {}),
                 ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
                 ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
                 ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
@@ -281,31 +272,52 @@ export default function Home() {
         body: JSON.stringify({ id: submissionId, reaction: tag, voter }),
       });
       const j = await res.json();
+
       if (!res.ok || !j.ok) {
         alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
-        // revertir optimismo si falló
-        await refreshOne(submissionId);
+        // revertir optimismo ante error
+        refreshOne(submissionId);
         return;
       }
-      // si el server retornó totales, usa fuente de verdad
+
+      // Si el backend devuelve totales, úsalo; si no, hacemos un refresh.
       if (j.totals) {
         setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
+          curr.map((it) =>
+            it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it
+          )
         );
       } else {
-        // si no, refresca desde API de totales
-        await refreshOne(submissionId);
+        setTimeout(() => refreshOne(submissionId), 400);
       }
+
       setLocalReacted(submissionId, tag);
     } catch (err: any) {
       alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
-      await refreshOne(submissionId);
+      refreshOne(submissionId);
     }
   }
 
-  /* ---------- Comentar ---------- */
+  /* ---------- Comentarios ---------- */
+  async function fetchComments(submissionId: string) {
+    try {
+      const r = await fetch(`/api/comments/${submissionId}`);
+      const j = await r.json();
+      if (j.ok) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
+        );
+      }
+    } catch {
+      /* silent */
+    }
+  }
 
-  async function submitComment(submissionId: string, body: string, nickname?: string) {
+  async function submitComment(
+    submissionId: string,
+    body: string,
+    nickname: string | undefined
+  ) {
     const r = await fetch(`/api/comments/${submissionId}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -321,7 +333,9 @@ export default function Home() {
     }
   }
 
-  /* ---------- UI ---------- */
+  const voterId = React.useMemo(() => getVoter(), []);
+
+  /* ========================= Render ========================= */
 
   return (
     <main className="mx-auto max-w-5xl p-4">
@@ -329,13 +343,17 @@ export default function Home() {
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => setTab('RUMOR')}
-          className={`px-4 py-2 rounded-full border ${tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
+          className={`px-4 py-2 rounded-full border ${
+            tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
+          }`}
         >
           Rumor 🧐
         </button>
         <button
           onClick={() => setTab('REPORTE')}
-          className={`px-4 py-2 rounded-full border ${tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
+          className={`px-4 py-2 rounded-full border ${
+            tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
+          }`}
         >
           Buzón 📨
         </button>
@@ -344,7 +362,9 @@ export default function Home() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FORM */}
         <section className="rounded-2xl border p-4">
-          <h2 className="text-lg font-semibold mb-4">Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}</h2>
+          <h2 className="text-lg font-semibold mb-4">
+            Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
+          </h2>
 
           <form onSubmit={submit} className="space-y-3">
             <div>
@@ -410,44 +430,56 @@ export default function Home() {
             <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
           )}
 
-          {feed.map((it) => (
-            <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white">
-              <div className="text-xs text-gray-500">{new Date(it.created_at).toLocaleString()}</div>
-              <div>
-                <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
-                <h3 className="font-semibold">{it.title}</h3>
-                <p className="text-sm mt-1">{it.content}</p>
-                {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
-              </div>
+          {feed.map((it) => {
+            const reacted = getLocalReacted(it.id);
+            return (
+              <article
+                key={it.id}
+                className="rounded-2xl border p-4 flex flex-col gap-3 bg-white"
+              >
+                <div className="text-xs text-gray-500">
+                  {new Date(it.created_at).toLocaleString()}
+                </div>
+                <div>
+                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">
+                    {it.category}
+                  </div>
+                  <h3 className="font-semibold">{it.title}</h3>
+                  <p className="text-sm mt-1">{it.content}</p>
+                  {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
+                </div>
 
-              {/* Reacciones */}
-              <div className="flex flex-wrap items-center gap-2">
-                {REACTIONS.map((r) => {
-                  const reacted = getLocalReacted(it.id);
-                  return (
+                {/* Reacciones */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {REACTIONS.map((r) => (
                     <button
                       key={r.key}
                       onClick={() => react(it.id, r.tag)}
                       className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
-                        reacted === r.tag ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50'
+                        reacted === r.tag
+                          ? 'bg-emerald-50 border-emerald-300'
+                          : 'bg-white hover:bg-gray-50'
                       }`}
                       title={r.label}
                     >
                       <span>{r.code}</span>
                       <span>{(it.totals as any)[r.key]}</span>
                     </button>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
 
-              {/* Comentarios */}
-              <CommentsBlock
-                submissionId={it.id}
-                comments={it.comments ?? []}
-                onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
-              />
-            </article>
-          ))}
+                {/* Comentarios */}
+                <CommentsBlock
+                  submissionId={it.id}
+                  comments={it.comments ?? []}
+                  onAdd={async (body, nickname) => {
+                    const ok = await submitComment(it.id, body, nickname);
+                    return ok;
+                  }}
+                />
+              </article>
+            );
+          })}
         </section>
       </div>
 
@@ -459,16 +491,15 @@ export default function Home() {
   );
 }
 
-/* ===========================
-   Bloque de comentarios
-=========================== */
+/* ========================= Bloque de comentarios ========================= */
+
 function CommentsBlock({
   submissionId,
   comments,
   onAdd,
 }: {
   submissionId: string;
-  comments: Comment[];
+  comments: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
   onAdd: (body: string, nickname?: string) => Promise<boolean>;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -490,7 +521,10 @@ function CommentsBlock({
 
   return (
     <div className="border-t pt-3 mt-2">
-      <button onClick={() => setOpen((v) => !v)} className="text-sm text-emerald-700 hover:underline">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-sm text-emerald-700 hover:underline"
+      >
         {open ? 'Ocultar comentarios' : `Comentarios (${comments.length})`}
       </button>
 
@@ -527,7 +561,9 @@ function CommentsBlock({
                 <div>{c.body}</div>
               </li>
             ))}
-            {comments.length === 0 && <li className="text-xs text-gray-500">Sé el primero en comentar.</li>}
+            {comments.length === 0 && (
+              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
+            )}
           </ul>
         </div>
       )}
