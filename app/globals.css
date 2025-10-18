@@ -1,7 +1,36 @@
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Paleta base por tema */
+:root {
+  --bg: theme(colors.surface.light);
+  --fg: #111827; /* gray-900 */
+  --card: #ffffff;
+}
+.dark {
+  --bg: theme(colors.surface.dark);
+  --fg: #e5e7eb;  /* gray-200 */
+  --card: #0b1220; /* un poco más claro que el fondo oscuro */
+}
 
-Fix: limpiar globals.css para usar Tailwind
+/* Colores globales */
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* Utilidades pequeñas */
+.container-narrow { @apply max-w-6xl mx-auto px-4; }
+.card { @apply rounded-2xl bg-[var(--card)] shadow-soft border border-white/10; }
+.card-hover { @apply transition hover:shadow-lg hover:-translate-y-0.5; }
+.btn {
+  @apply inline-flex items-center gap-2 rounded-xl px-4 py-2 font-medium transition;
+}
+.btn-primary {
+  @apply bg-brand-500 text-white hover:bg-brand-400 active:scale-[.99];
+}
+.chip { @apply inline-flex items-center rounded-full bg-brand-500/10 text-brand-500 px-2.5 py-1 text-xs; }
+
+/* Selección y scroll */
+::selection { background: #34d39933; }
