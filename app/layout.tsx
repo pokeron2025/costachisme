@@ -15,44 +15,45 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  React.useEffect(() => {
-    let lastScroll = 0;
-    const header = document.getElementById("site-header");
-
-    const onScroll = () => {
-      const curr = window.scrollY;
-      if (!header) return;
-
-      // Shrink + colores al hacer scroll
-      if (curr > 10) {
-        header.classList.add("is-scrolled");
-      } else {
-        header.classList.remove("is-scrolled");
+/** Script inline: oculta/mostrar + shrink del header en scroll */
+function HeaderScrollScript() {
+  const code = `
+    (function(){
+      var header, lastY = 0;
+      function onScroll(){
+        var y = window.scrollY || 0;
+        if (!header) return;
+        // Sombra + "shrink"
+        if (y > 8) header.classList.add('is-scrolled'); else header.classList.remove('is-scrolled');
+        // Ocultar al bajar, mostrar al subir
+        if (y > lastY && y > 80) header.classList.add('header-hidden');
+        else header.classList.remove('header-hidden');
+        lastY = y;
       }
-
-      // Ocultar/mostrar con scroll
-      if (curr > lastScroll && curr > 80) {
-        header.classList.add("header-hidden");
-      } else {
-        header.classList.remove("header-hidden");
+      function init(){
+        header = document.getElementById('site-header');
+        if(!header) return;
+        onScroll();
+        window.addEventListener('scroll', onScroll, { passive: true });
       }
+      if(document.readyState==='loading'){
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+    })();
+  `;
+  return <script dangerouslySetInnerHTML={{ __html: code }} />;
+}
 
-      lastScroll = curr;
-    };
-
-    window.addEventListener("scroll", onScroll);
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
       <body className="min-h-screen bg-white text-[#111827]">
-        {/* HEADER */}
+        {/* Script que controla el header en scroll */}
+        <HeaderScrollScript />
+
+        {/* HEADER fijo */}
         <header
           id="site-header"
           className="
@@ -73,46 +74,26 @@ export default function RootLayout({
                 priority
               />
               <div className="leading-tight">
-                <p className="brand-title font-medium tracking-wide">
-                  Salina Cruz
-                </p>
-                <p className="brand-sub opacity-80">
-                  Rumores, risas y voz ciudadana
-                </p>
+                <p className="brand-title font-medium tracking-wide">Salina Cruz</p>
+                <p className="brand-sub opacity-80">Rumores, risas y voz ciudadana</p>
               </div>
             </Link>
 
             <nav className="ml-auto flex items-center gap-1 sm:gap-3 text-[14px]">
-              <Link
-                href="/"
-                className="px-3 py-1 rounded hover:bg-white/10 transition"
-              >
-                Inicio
-              </Link>
-              <Link
-                href="/contacto"
-                className="px-3 py-1 rounded hover:bg-white/10 transition"
-              >
-                Contacto
-              </Link>
-              <Link
-                href="/acerca"
-                className="px-3 py-1 rounded hover:bg-white/10 transition"
-              >
-                Acerca
-              </Link>
+              <Link href="/" className="px-3 py-1 rounded hover:bg-white/10 transition">Inicio</Link>
+              <Link href="/contacto" className="px-3 py-1 rounded hover:bg-white/10 transition">Contacto</Link>
+              <Link href="/acerca" className="px-3 py-1 rounded hover:bg-white/10 transition">Acerca</Link>
             </nav>
           </div>
         </header>
 
-        {/* CONTENIDO */}
-        <main className="mx-auto max-w-5xl p-4 pt-20">{children}</main>
+        {/* CONTENIDO (dejamos espacio para el header) */}
+        <main className="mx-auto max-w-6xl p-4 pt-20">{children}</main>
 
         {/* FOOTER */}
         <footer className="mt-10 border-t">
-          <div className="mx-auto max-w-5xl text-center text-sm text-gray-600 p-6">
-            Costachisme © {new Date().getFullYear()} · Hecho con{" "}
-            <span className="mx-1">❤️</span> en Salina Cruz
+          <div className="mx-auto max-w-6xl text-center text-sm text-gray-600 p-6">
+            Costachisme © {new Date().getFullYear()} · Hecho con <span className="mx-1">❤️</span> en Salina Cruz
           </div>
         </footer>
       </body>
