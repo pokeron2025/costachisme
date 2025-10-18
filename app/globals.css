@@ -154,3 +154,59 @@ html, body { background: var(--bg); color: var(--fg); }
   will-change: transform;
   transition: transform 0.3s ease, box-shadow 0.25s ease, color 0.25s ease, background-color 0.25s ease;
 }
+/* ===== Header shrink on scroll ===== */
+#site-header .inner {
+  height: 56px;                 /* h-14 */
+  transition: height 0.25s ease, padding 0.25s ease;
+  display: flex;
+  align-items: center;
+}
+
+#site-header .logo {
+  width: 28px;
+  height: 28px;
+  transition: transform 0.25s ease, width 0.25s ease, height 0.25s ease, border-radius 0.25s ease;
+}
+
+#site-header .brand-title {
+  font-size: 14px;              /* text-sm */
+  transition: font-size 0.25s ease, letter-spacing 0.25s ease, opacity 0.25s ease;
+}
+
+#site-header .brand-sub {
+  font-size: 12px;              /* text-[12px] */
+  transition: font-size 0.25s ease, opacity 0.25s ease;
+}
+
+/* Estado con scroll: más compacto */
+#site-header.is-scrolled .inner {
+  height: 48px;                 /* h-12 */
+}
+
+#site-header.is-scrolled .logo {
+  width: 24px;
+  height: 24px;
+  transform: translateY(0);     /* por si quieres levantarlo un pelín */
+  border-radius: 8px;
+}
+
+#site-header.is-scrolled .brand-title {
+  font-size: 13px;              /* un poco más pequeño */
+  letter-spacing: 0.01em;
+}
+
+#site-header.is-scrolled .brand-sub {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* Ya lo tenías, lo dejo aquí por claridad */
+.is-scrolled {
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+}
+.header-hidden { transform: translateY(-100%); }
+
+#site-header {
+  will-change: transform, box-shadow;
+  transition: transform 0.3s ease, box-shadow 0.25s ease;
+}
