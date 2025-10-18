@@ -110,6 +110,17 @@ function setLocalReacted(submissionId: string, reaction: string) {
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
+function totalReactions(t: ReactionTotals) {
+  return (
+    (t.like_count || 0) +
+    (t.dislike_count || 0) +
+    (t.haha_count || 0) +
+    (t.wow_count || 0) +
+    (t.angry_count || 0) +
+    (t.sad_count || 0)
+  );
+}
+
 /* ========================= Mini componentes (UI + Animaciones) ========================= */
 
 function ReactionButton({
@@ -173,6 +184,13 @@ export default function Home() {
   const [loading, setLoading] = React.useState(false);
   const [feed, setFeed] = React.useState<FeedItem[]>([]);
   const [msg, setMsg] = React.useState<string | null>(null);
+
+  // Controles de filtro/orden/búsqueda
+  const [query, setQuery] = React.useState('');
+  const [sortBy, setSortBy] = React.useState<'recent' | 'reactions' | 'comments'>('recent');
+  const [minReactions, setMinReactions] = React.useState(0);
+  const [minComments, setMinComments] = React.useState(0);
+  const [onlyWithImage, setOnlyWithImage] = React.useState(false);
 
   const [form, setForm] = React.useState({
     title: '',
@@ -261,7 +279,7 @@ export default function Home() {
   /* ---------- Realtime: reacciones y comentarios ---------- */
   React.useEffect(() => {
     const channel = supabaseBrowser
-      .channel('public:reactions-comments-v3')
+      .channel('public:reactions-comments-v4')
 
       // Reacciones -> refrescar solo la tarjeta
       .on(
@@ -317,7 +335,7 @@ export default function Home() {
         }
       )
 
-      // Comentarios UPDATE -> refrescar lista (por simplicidad)
+      // Comentarios UPDATE -> refrescar lista (simple)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'comments' },
@@ -431,31 +449,128 @@ export default function Home() {
     }
   }
 
+  /* ---------- Derivados: lista filtrada/ordenada ---------- */
+  const derived = React.useMemo(() => {
+    // 1) por categoría (tab)
+    let list = feed.filter((it) => it.category === tab);
+
+    // 2) búsqueda
+    const q = query.trim().toLowerCase();
+    if (q) {
+      list = list.filter((it) => {
+        const hay =
+          it.title.toLowerCase().includes(q) ||
+          it.content.toLowerCase().includes(q) ||
+          (it.barrio || '').toLowerCase().includes(q);
+        return hay;
+      });
+    }
+
+    // 3) sólo con imagen
+    if (onlyWithImage) {
+      list = list.filter((it) => !!it.imagen_url);
+    }
+
+    // 4) mínimos
+    if (minReactions > 0) {
+      list = list.filter((it) => totalReactions(it.totals) >= minReactions);
+    }
+    if (minComments > 0) {
+      list = list.filter((it) => (it.comments?.length || 0) >= minComments);
+    }
+
+    // 5) orden
+    list = [...list].sort((a, b) => {
+      if (sortBy === 'recent') {
+        return +new Date(b.created_at) - +new Date(a.created_at);
+      }
+      if (sortBy === 'reactions') {
+        return totalReactions(b.totals) - totalReactions(a.totals);
+      }
+      // comments
+      const ac = a.comments?.length || 0;
+      const bc = b.comments?.length || 0;
+      return bc - ac;
+    });
+
+    return list;
+  }, [feed, tab, query, sortBy, minReactions, minComments, onlyWithImage]);
+
   /* ========================= Render ========================= */
 
   return (
-    <main className="mx-auto max-w-5xl p-4">
-      {/* Tabs */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setTab('RUMOR')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
-        >
-          Rumor 🧐
-        </button>
-        <button
-          onClick={() => setTab('REPORTE')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
-        >
-          Buzón 📨
-        </button>
+    <main className="mx-auto max-w-6xl p-4">
+      {/* Tabs + Controles */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
+        <div className="flex gap-2">
+          <button
+            onClick={() => setTab('RUMOR')}
+            className={`px-4 py-2 rounded-full border ${
+              tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
+            }`}
+          >
+            Rumor 🧐
+          </button>
+          <button
+            onClick={() => setTab('REPORTE')}
+            className={`px-4 py-2 rounded-full border ${
+              tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
+            }`}
+          >
+            Buzón 📨
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="rounded-lg border px-3 py-2 w-60"
+            placeholder="Buscar por título, texto o barrio…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+
+          <select
+            className="rounded-lg border px-3 py-2"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            title="Ordenar por"
+          >
+            <option value="recent">Más recientes</option>
+            <option value="reactions">Más reaccionados</option>
+            <option value="comments">Más comentados</option>
+          </select>
+
+          <input
+            type="number"
+            min={0}
+            className="rounded-lg border px-3 py-2 w-28"
+            placeholder="Mín. reacts"
+            value={minReactions}
+            onChange={(e) => setMinReactions(Number(e.target.value || 0))}
+            title="Mínimo de reacciones"
+          />
+          <input
+            type="number"
+            min={0}
+            className="rounded-lg border px-3 py-2 w-28"
+            placeholder="Mín. comments"
+            value={minComments}
+            onChange={(e) => setMinComments(Number(e.target.value || 0))}
+            title="Mínimo de comentarios"
+          />
+
+          <label className="flex items-center gap-2 text-sm px-2 py-2 border rounded-lg bg-white">
+            <input
+              type="checkbox"
+              checked={onlyWithImage}
+              onChange={(e) => setOnlyWithImage(e.target.checked)}
+            />
+            Solo con imagen
+          </label>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6">
         {/* FORM */}
         <motion.section
           layout
@@ -526,15 +641,21 @@ export default function Home() {
 
         {/* FEED */}
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Lo más reciente (aprobado)</h2>
+          <h2 className="text-lg font-semibold">Resultados</h2>
 
-          {feed.length === 0 && (
-            <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
+          {derived.length === 0 && (
+            <div className="text-sm text-gray-500">
+              No hay publicaciones que coincidan con los filtros.
+            </div>
           )}
 
           <AnimatePresence initial={false}>
-            {feed.map((it) => {
+            {derived.map((it) => {
               const reacted = getLocalReacted(it.id);
+              const commentsCount = it.comments?.length || 0;
+              const reactsCount = totalReactions(it.totals);
+              const isHot = reactsCount >= 5 || commentsCount >= 3;
+
               return (
                 <motion.article
                   key={it.id}
@@ -545,9 +666,17 @@ export default function Home() {
                   transition={{ type: 'spring', stiffness: 300, damping: 24 }}
                   className="rounded-2xl border p-4 flex flex-col gap-3 bg-white"
                 >
-                  <div className="text-xs text-gray-500">
-                    {new Date(it.created_at).toLocaleString()}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs text-gray-500">
+                      {new Date(it.created_at).toLocaleString()}
+                    </div>
+                    {isHot && (
+                      <span className="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full border border-orange-200">
+                        🔥 Popular
+                      </span>
+                    )}
                   </div>
+
                   <div>
                     <div className="text-[10px] tracking-wide text-gray-500 mb-1">
                       {it.category}
@@ -555,6 +684,14 @@ export default function Home() {
                     <h3 className="font-semibold">{it.title}</h3>
                     <p className="text-sm mt-1">{it.content}</p>
                     {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
+                    {it.imagen_url ? (
+                      <img
+                        src={it.imagen_url}
+                        alt="Imagen adjunta"
+                        className="mt-2 rounded-lg border max-h-64 object-cover w-full"
+                        loading="lazy"
+                      />
+                    ) : null}
                   </div>
 
                   {/* Reacciones */}
@@ -569,6 +706,9 @@ export default function Home() {
                         onClick={() => react(it.id, r.tag)}
                       />
                     ))}
+                    <span className="ml-2 text-xs text-gray-500">
+                      {reactsCount} reacciones · {commentsCount} comentarios
+                    </span>
                   </div>
 
                   {/* Comentarios */}
@@ -712,7 +852,6 @@ async function submitComment(
   if (j.ok) {
     // El INSERT hará merge en realtime; confirmamos por si acaso:
     setTimeout(() => {
-      // best-effort, no bloquea
       fetch(`/api/comments/${submissionId}`).then(() => {});
     }, 150);
     return true;
