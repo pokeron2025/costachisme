@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { z } from 'zod';
+import { supabaseBrowser } from '@/lib/supabase-browser';
 
 // ---------- Tipos ----------
 type Submission = {
@@ -92,6 +93,43 @@ export default function Home() {
     barrio: '',
     imagen_url: '',
   });
+
+  // >>> Realtime: throttle para refrescar el feed sin spam
+  const refreshTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const scheduleRefresh = () => {
+    if (refreshTimer.current) return; // ya hay uno programado
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      load(); // vuelve a cargar el feed
+    }, 250); // 250ms de debounce
+  };
+
+  // >>> Realtime: suscripción a cambios en reactions y comments
+  React.useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('public:reactions-comments')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reactions' },
+        (_payload) => {
+          scheduleRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'comments' },
+        (_payload) => {
+          scheduleRefresh();
+        }
+      )
+      .subscribe((_status) => {
+        // Opcional: console.log('Realtime status', _status);
+      });
+
+    return () => {
+      supabaseBrowser.removeChannel(channel);
+    };
+  }, []); // se monta una sola vez
 
   // Cargar feed inicial
   async function load() {
