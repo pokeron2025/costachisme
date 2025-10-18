@@ -2,7 +2,7 @@ import "./globals.css";
 import { Poppins } from "next/font/google";
 import Image from "next/image";
 import React from "react";
-
+import ThemeToggle from "./components/ThemeToggle";
 const poppins = Poppins({
   subsets: ["latin"],
   weight: ["400", "600", "700"],
