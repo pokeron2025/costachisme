@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 
-// ---------- Tipos ----------
+/* =========================
+   Tipos
+========================= */
 type Submission = {
   id: string;
   created_at: string;
@@ -30,15 +32,20 @@ type FeedItem = Submission & {
   comments?: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
 };
 
-// ---------- Validación del formulario ----------
+/* =========================
+   Validación formulario
+========================= */
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(5, { message: 'El título debe tener al menos 5 caracteres.' }).max(80),
-  content: z.string().min(12, { message: 'El texto debe tener al menos 12 caracteres.' }).max(400),
+  title: z.string().min(5).max(80),
+  content: z.string().min(12).max(400),
   barrio: z.string().max(60).optional().or(z.literal('')),
   imagen_url: z.string().url().optional().or(z.literal('')),
 });
 
+/* =========================
+   Reacciones disponibles
+========================= */
 const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string; tag: string }> = [
   { key: 'like_count', code: '👍', label: 'Me gusta', tag: 'like' },
   { key: 'dislike_count', code: '👎', label: 'No me gusta', tag: 'dislike' },
@@ -48,7 +55,9 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-// ---------- Helpers ----------
+/* =========================
+   Identidad local y “antispam” de sesión
+========================= */
 function getVoter() {
   const k = '__voter_id__';
   let v = typeof window !== 'undefined' ? localStorage.getItem(k) : null;
@@ -73,45 +82,79 @@ function setLocalReacted(submissionId: string, reaction: string) {
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
-// ---------- Página ----------
+/* =========================
+   Página
+========================= */
 export default function Home() {
   const [tab, setTab] = useState<'RUMOR' | 'REPORTE'>('RUMOR');
   const [loading, setLoading] = useState(false);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
-
   const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
 
-  // ----------- Helpers para refrescar datos individuales -----------
-  async function refreshOne(submissionId: string) {
+  /* --- Realtime: debounce de refresco global (fallback) --- */
+  const refreshTimer = useRef<NodeJS.Timeout | null>(null);
+  const scheduleRefreshAll = () => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      load();
+    }, 250);
+  };
+
+  /* --- Pide totales para una publicación específica y actualiza solo esa tarjeta --- */
+  async function refreshOne(id: string) {
     try {
-      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
+      const r = await fetch(`/api/reaction-totals/${id}`, { cache: 'no-store' });
       const j = await r.json();
-      if (j.ok && j.data) {
-        setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.data } : it))
-        );
+      if (j?.ok && j?.totals) {
+        setFeed(curr => curr.map(it => (it.id === id ? { ...it, totals: j.totals as ReactionTotals } : it)));
       }
     } catch {
       /* silent */
     }
   }
 
-  async function fetchComments(submissionId: string) {
-    try {
-      const r = await fetch(`/api/comments/${submissionId}`);
-      const j = await r.json();
-      if (j.ok) {
-        setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it))
-        );
-      }
-    } catch {
-      /* silent */
-    }
-  }
+  /* --- Suscripción realtime a reacciones y comentarios --- */
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('public:reactions-comments')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reactions' },
+        (payload) => {
+          const sid =
+            (payload.new as any)?.submission_id ??
+            (payload.old as any)?.submission_id;
+          if (sid) {
+            // refresca SOLO esa tarjeta
+            refreshOne(sid);
+          } else {
+            scheduleRefreshAll();
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'comments' },
+        (payload) => {
+          const sid =
+            (payload.new as any)?.submission_id ??
+            (payload.old as any)?.submission_id;
+          if (sid) {
+            fetchComments(sid);
+          }
+        }
+      )
+      .subscribe();
 
-  // ----------- Cargar feed inicial -----------
+    return () => {
+      supabaseBrowser.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* --- Cargar feed inicial (con totales desde el server y confirmación por item) --- */
   async function load() {
     try {
       const r = await fetch('/api/list', { cache: 'no-store' });
@@ -130,7 +173,12 @@ export default function Home() {
           comments: [],
         }));
         setFeed(normalized);
-        normalized.forEach((it) => fetchComments(it.id));
+
+        // Confirmación por publicación (evita “volver a 0” si el join del feed no trajo algo)
+        normalized.forEach((it) => {
+          refreshOne(it.id);
+          fetchComments(it.id);
+        });
       } else {
         setMsg(j.error || 'No se pudo cargar el feed.');
       }
@@ -143,34 +191,19 @@ export default function Home() {
     load();
   }, []);
 
-  // ----------- Suscripción realtime -----------
-  useEffect(() => {
-    const channel = supabaseBrowser
-      .channel('public:reactions-comments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
-        const sid =
-          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-        if (sid) refreshOne(sid);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
-        const sid =
-          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-        if (sid) fetchComments(sid);
-      })
-      .subscribe();
-
-    return () => {
-      supabaseBrowser.removeChannel(channel);
-    };
-  }, []);
-
-  // ----------- Enviar rumor/reporte -----------
+  /* --- Enviar rumor/reporte --- */
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
     try {
-      const payload = { category: tab, ...form };
+      const payload = {
+        category: tab,
+        title: form.title,
+        content: form.content,
+        barrio: form.barrio,
+        imagen_url: form.imagen_url,
+      };
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
         setMsg(parsed.error.errors[0].message);
@@ -184,9 +217,9 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error.');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
       } else {
-        setMsg('¡Enviado!');
+        setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
         load();
       }
@@ -197,9 +230,11 @@ export default function Home() {
     }
   }
 
-  // ----------- Reaccionar -----------
+  /* --- Reaccionar --- */
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
+
+    // Evita re-clicks idénticos en la misma sesión
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
@@ -216,34 +251,89 @@ export default function Home() {
         return;
       }
 
-      // asegura los números desde backend
-      await refreshOne(submissionId);
+      // Preferimos usar los totales frescos del backend
+      if (j.totals) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
+        );
+      } else {
+        // Fallback optimista (si por alguna razón no llegó totals)
+        setFeed((curr) =>
+          curr.map((it) =>
+            it.id === submissionId
+              ? {
+                  ...it,
+                  totals: {
+                    ...it.totals,
+                    ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
+                    ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
+                    ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
+                    ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
+                    ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
+                    ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
+                  },
+                }
+              : it
+          )
+        );
+      }
+
       setLocalReacted(submissionId, tag);
+
+      // Y aseguramos sincronía con la base
+      refreshOne(submissionId);
     } catch (err: any) {
-      alert('⚠️ Fallo de red: ' + (err?.message || 'sin detalle'));
+      alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
+    }
+  }
+
+  /* --- Comentarios: leer y enviar --- */
+  async function fetchComments(submissionId: string) {
+    try {
+      const r = await fetch(`/api/comments/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok) {
+        setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  async function submitComment(submissionId: string, body: string, nickname: string | undefined) {
+    const r = await fetch(`/api/comments/${submissionId}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body, nickname }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      fetchComments(submissionId);
+      return true;
+    } else {
+      alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
+      return false;
     }
   }
 
   const voterId = useMemo(() => getVoter(), []);
 
-  // ----------- Render -----------
+  /* =========================
+     UI
+  ========================= */
   return (
     <main className="mx-auto max-w-5xl p-4">
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => setTab('RUMOR')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
+          className={`px-4 py-2 rounded-full border ${tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
         >
           Rumor 🧐
         </button>
         <button
           onClick={() => setTab('REPORTE')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
+          className={`px-4 py-2 rounded-full border ${tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
         >
           Buzón 📨
         </button>
@@ -272,7 +362,7 @@ export default function Home() {
               <label className="block text-sm mb-1">Texto</label>
               <textarea
                 className="w-full rounded-lg border px-3 py-2 h-32"
-                placeholder="Sin nombres ni datos personales."
+                placeholder="Sin nombres ni datos personales. Enfócate en situaciones."
                 value={form.content}
                 onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
               />
@@ -317,16 +407,14 @@ export default function Home() {
           <h2 className="text-lg font-semibold">Lo más reciente (aprobado)</h2>
 
           {feed.length === 0 && (
-            <div className="text-sm text-gray-500">Aún no hay publicaciones.</div>
+            <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
           )}
 
           {feed.map((it) => {
             const reacted = getLocalReacted(it.id);
             return (
               <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white">
-                <div className="text-xs text-gray-500">
-                  {new Date(it.created_at).toLocaleString()}
-                </div>
+                <div className="text-xs text-gray-500">{new Date(it.created_at).toLocaleString()}</div>
                 <div>
                   <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
                   <h3 className="font-semibold">{it.title}</h3>
@@ -341,9 +429,7 @@ export default function Home() {
                       key={r.key}
                       onClick={() => react(it.id, r.tag)}
                       className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
-                        reacted === r.tag
-                          ? 'bg-emerald-50 border-emerald-300'
-                          : 'bg-white hover:bg-gray-50'
+                        reacted === r.tag ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50'
                       }`}
                       title={r.label}
                     >
@@ -357,15 +443,7 @@ export default function Home() {
                 <CommentsBlock
                   submissionId={it.id}
                   comments={it.comments ?? []}
-                  onAdd={async (body, nickname) => {
-                    const ok = await fetch(`/api/comments/${it.id}`, {
-                      method: 'POST',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ body, nickname }),
-                    }).then((r) => r.json());
-                    if (ok) fetchComments(it.id);
-                    return true;
-                  }}
+                  onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
                 />
               </article>
             );
@@ -381,7 +459,9 @@ export default function Home() {
   );
 }
 
-// ---------- Bloque de comentarios ----------
+/* =========================
+   Bloque de comentarios
+========================= */
 function CommentsBlock({
   submissionId,
   comments,
@@ -410,10 +490,7 @@ function CommentsBlock({
 
   return (
     <div className="border-t pt-3 mt-2">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="text-sm text-emerald-700 hover:underline"
-      >
+      <button onClick={() => setOpen((v) => !v)} className="text-sm text-emerald-700 hover:underline">
         {open ? 'Ocultar comentarios' : `Comentarios (${comments.length})`}
       </button>
 
@@ -422,7 +499,7 @@ function CommentsBlock({
           <form onSubmit={handleSend} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
             <input
               className="rounded-lg border px-3 py-2"
-              placeholder="Escribe un comentario…"
+              placeholder="Escribe un comentario (anónimo)…"
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
@@ -445,18 +522,16 @@ function CommentsBlock({
             {comments.map((c) => (
               <li key={c.id} className="text-sm rounded-lg bg-gray-50 p-2">
                 <div className="text-xs text-gray-500 mb-1">
-                  {c.nickname ? c.nickname : 'Anónimo'} ·{' '}
-                  {new Date(c.created_at).toLocaleString()}
+                  {c.nickname ? c.nickname : 'Anónimo'} · {new Date(c.created_at).toLocaleString()}
                 </div>
                 <div>{c.body}</div>
               </li>
             ))}
-            {comments.length === 0 && (
-              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
-            )}
+            {comments.length === 0 && <li className="text-xs text-gray-500">Sé el primero en comentar.</li>}
           </ul>
         </div>
       )}
     </div>
   );
 }
+```0
