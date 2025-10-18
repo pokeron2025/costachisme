@@ -3,6 +3,7 @@
 import React from 'react';
 import { z } from 'zod';
 import { supabaseBrowser } from '@/lib/supabase-browser';
+import { motion, AnimatePresence } from 'framer-motion';
 
 /* ========================= Tipos ========================= */
 
@@ -31,7 +32,7 @@ type Comment = {
   body: string;
   nickname: string | null;
   created_at: string;
-  submission_id?: string; // útil para merges en realtime
+  submission_id?: string;
 };
 
 type FeedItem = Submission & {
@@ -57,7 +58,12 @@ const schema = z.object({
 
 /* ========================= Constantes UI ========================= */
 
-const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string; tag: string }> = [
+const REACTIONS: Array<{
+  key: keyof ReactionTotals;
+  code: string;
+  label: string;
+  tag: 'like' | 'dislike' | 'haha' | 'wow' | 'angry' | 'sad';
+}> = [
   { key: 'like_count', code: '👍', label: 'Me gusta', tag: 'like' },
   { key: 'dislike_count', code: '👎', label: 'No me gusta', tag: 'dislike' },
   { key: 'haha_count', code: '😂', label: 'Jaja', tag: 'haha' },
@@ -104,6 +110,62 @@ function setLocalReacted(submissionId: string, reaction: string) {
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
+/* ========================= Mini componentes (UI + Animaciones) ========================= */
+
+function ReactionButton({
+  active,
+  emoji,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  emoji: string;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  const [burst, setBurst] = React.useState(false);
+
+  function handleClick() {
+    onClick();
+    setBurst(true);
+    setTimeout(() => setBurst(false), 500);
+  }
+
+  return (
+    <div className="relative inline-flex">
+      <motion.button
+        whileTap={{ scale: 0.9 }}
+        animate={active ? { scale: [1, 1.1, 1] } : { scale: 1 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 15 }}
+        onClick={handleClick}
+        className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
+          active ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50'
+        }`}
+        title={label}
+      >
+        <span>{emoji}</span>
+        <span>{count}</span>
+      </motion.button>
+
+      <AnimatePresence>
+        {burst && (
+          <motion.div
+            initial={{ opacity: 0, y: 0, scale: 0.8 }}
+            animate={{ opacity: 1, y: -18, scale: 1 }}
+            exit={{ opacity: 0, y: -26, scale: 0.9 }}
+            transition={{ duration: 0.45 }}
+            className="absolute left-1/2 -translate-x-1/2 -top-2 pointer-events-none select-none"
+          >
+            <span className="text-base">{emoji}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 /* ========================= Página ========================= */
 
 export default function Home() {
@@ -141,8 +203,7 @@ export default function Home() {
         comments: [],
       }));
       setFeed(normalized);
-      // precargar comentarios (no bloquea UI)
-      normalized.forEach((it) => fetchComments(it.id));
+      normalized.forEach((it) => fetchComments(it.id)); // precarga comentarios
     } catch (e: any) {
       setMsg(e?.message || 'Error de red al cargar el feed.');
     }
@@ -199,11 +260,10 @@ export default function Home() {
 
   /* ---------- Realtime: reacciones y comentarios ---------- */
   React.useEffect(() => {
-    // canal nuevo para evitar fantasmas de suscripciones anteriores
     const channel = supabaseBrowser
-      .channel('public:reactions-comments-v2')
+      .channel('public:reactions-comments-v3')
 
-      // ► Reacciones: cuando alguien reacciona, refrescamos solo esa tarjeta
+      // Reacciones -> refrescar solo la tarjeta
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'reactions' },
@@ -215,7 +275,7 @@ export default function Home() {
         }
       )
 
-      // ► Comentarios: INSERT/DELETE hacen merge inmediato en memoria; UPDATE refresca lista
+      // Comentarios INSERT -> merge inmediato
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'comments' },
@@ -238,6 +298,8 @@ export default function Home() {
           );
         }
       )
+
+      // Comentarios DELETE -> sacar en memoria
       .on(
         'postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'comments' },
@@ -254,6 +316,8 @@ export default function Home() {
           );
         }
       )
+
+      // Comentarios UPDATE -> refrescar lista (por simplicidad)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'comments' },
@@ -264,6 +328,7 @@ export default function Home() {
           if (sid) fetchComments(sid);
         }
       )
+
       .subscribe();
 
     return () => {
@@ -310,12 +375,12 @@ export default function Home() {
   }
 
   /* ---------- Reaccionar (optimista + verificación) ---------- */
-  async function react(submissionId: string, tag: string) {
+  async function react(submissionId: string, tag: 'like' | 'dislike' | 'haha' | 'wow' | 'angry' | 'sad') {
     const voter = getVoter();
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
-    // Optimista: +1 local mientras responde el server
+    // Optimismo: +1 local
     setFeed((curr) =>
       curr.map((it) =>
         it.id === submissionId
@@ -345,12 +410,10 @@ export default function Home() {
 
       if (!res.ok || !j.ok) {
         alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
-        // Revertir al dato real
         await refreshOne(submissionId);
         return;
       }
 
-      // Si el backend devolvió totales, úsalo; si no, asegúrate con refresh
       if (j.totals) {
         setFeed((curr) =>
           curr.map((it) =>
@@ -365,25 +428,6 @@ export default function Home() {
     } catch (err: any) {
       alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
       refreshOne(submissionId);
-    }
-  }
-
-  /* ---------- Comentar ---------- */
-  async function submitComment(submissionId: string, body: string, nickname?: string) {
-    const r = await fetch(`/api/comments/${submissionId}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ body, nickname }),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      // el INSERT se reflejará en vivo por Realtime (merge en memoria),
-      // pero por si acaso confirmamos
-      setTimeout(() => fetchComments(submissionId), 200);
-      return true;
-    } else {
-      alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
-      return false;
     }
   }
 
@@ -413,7 +457,13 @@ export default function Home() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FORM */}
-        <section className="rounded-2xl border p-4">
+        <motion.section
+          layout
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+          className="rounded-2xl border p-4"
+        >
           <h2 className="text-lg font-semibold mb-4">
             Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
           </h2>
@@ -472,7 +522,7 @@ export default function Home() {
               {loading ? 'Enviando...' : 'Enviar'}
             </button>
           </form>
-        </section>
+        </motion.section>
 
         {/* FEED */}
         <section className="space-y-4">
@@ -482,60 +532,67 @@ export default function Home() {
             <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>
           )}
 
-          {feed.map((it) => {
-            const reacted = getLocalReacted(it.id);
-            return (
-              <article
-                key={it.id}
-                className="rounded-2xl border p-4 flex flex-col gap-3 bg-white"
-              >
-                <div className="text-xs text-gray-500">
-                  {new Date(it.created_at).toLocaleString()}
-                </div>
-                <div>
-                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">
-                    {it.category}
+          <AnimatePresence initial={false}>
+            {feed.map((it) => {
+              const reacted = getLocalReacted(it.id);
+              return (
+                <motion.article
+                  key={it.id}
+                  layout
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+                  className="rounded-2xl border p-4 flex flex-col gap-3 bg-white"
+                >
+                  <div className="text-xs text-gray-500">
+                    {new Date(it.created_at).toLocaleString()}
                   </div>
-                  <h3 className="font-semibold">{it.title}</h3>
-                  <p className="text-sm mt-1">{it.content}</p>
-                  {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
-                </div>
+                  <div>
+                    <div className="text-[10px] tracking-wide text-gray-500 mb-1">
+                      {it.category}
+                    </div>
+                    <h3 className="font-semibold">{it.title}</h3>
+                    <p className="text-sm mt-1">{it.content}</p>
+                    {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
+                  </div>
 
-                {/* Reacciones */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {REACTIONS.map((r) => (
-                    <button
-                      key={r.key}
-                      onClick={() => react(it.id, r.tag)}
-                      className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
-                        reacted === r.tag
-                          ? 'bg-emerald-50 border-emerald-300'
-                          : 'bg-white hover:bg-gray-50'
-                      }`}
-                      title={r.label}
-                    >
-                      <span>{r.code}</span>
-                      <span>{(it.totals as any)[r.key]}</span>
-                    </button>
-                  ))}
-                </div>
+                  {/* Reacciones */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {REACTIONS.map((r) => (
+                      <ReactionButton
+                        key={r.key}
+                        active={reacted === r.tag}
+                        emoji={r.code}
+                        count={(it.totals as any)[r.key]}
+                        label={r.label}
+                        onClick={() => react(it.id, r.tag)}
+                      />
+                    ))}
+                  </div>
 
-                {/* Comentarios */}
-                <CommentsBlock
-                  submissionId={it.id}
-                  comments={it.comments ?? []}
-                  onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
-                />
-              </article>
-            );
-          })}
+                  {/* Comentarios */}
+                  <CommentsBlock
+                    submissionId={it.id}
+                    comments={it.comments ?? []}
+                    onAdd={async (body, nickname) => submitComment(it.id, body, nickname)}
+                  />
+                </motion.article>
+              );
+            })}
+          </AnimatePresence>
         </section>
       </div>
 
       {/* Footer */}
-      <div className="text-center text-xs text-gray-500 mt-10">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.35 }}
+        className="text-center text-xs text-gray-500 mt-10"
+      >
         Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
-      </div>
+      </motion.div>
     </main>
   );
 }
@@ -577,45 +634,90 @@ function CommentsBlock({
         {open ? 'Ocultar comentarios' : `Comentarios (${comments.length})`}
       </button>
 
-      {open && (
-        <div className="mt-3 space-y-3">
-          <form onSubmit={handleSend} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
-            <input
-              className="rounded-lg border px-3 py-2"
-              placeholder="Escribe un comentario (anónimo)…"
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-            />
-            <input
-              className="rounded-lg border px-3 py-2"
-              placeholder="Apodo (opcional)"
-              value={nick}
-              onChange={(e) => setNick(e.target.value)}
-            />
-            <button
-              type="submit"
-              disabled={sending || body.trim().length < 3}
-              className="md:col-span-2 px-4 py-2 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
-            >
-              {sending ? 'Enviando…' : 'Comentar'}
-            </button>
-          </form>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            key="comments-panel"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ type: 'tween', duration: 0.25 }}
+            className="mt-3 space-y-3 overflow-hidden"
+          >
+            <form onSubmit={handleSend} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2">
+              <input
+                className="rounded-lg border px-3 py-2"
+                placeholder="Escribe un comentario (anónimo)…"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+              />
+              <input
+                className="rounded-lg border px-3 py-2"
+                placeholder="Apodo (opcional)"
+                value={nick}
+                onChange={(e) => setNick(e.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={sending || body.trim().length < 3}
+                className="md:col-span-2 px-4 py-2 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+              >
+                {sending ? 'Enviando…' : 'Comentar'}
+              </button>
+            </form>
 
-          <ul className="space-y-2">
-            {comments.map((c) => (
-              <li key={c.id} className="text-sm rounded-lg bg-gray-50 p-2">
-                <div className="text-xs text-gray-500 mb-1">
-                  {c.nickname ? c.nickname : 'Anónimo'} · {new Date(c.created_at).toLocaleString()}
-                </div>
-                <div>{c.body}</div>
-              </li>
-            ))}
-            {comments.length === 0 && (
-              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
-            )}
-          </ul>
-        </div>
-      )}
+            <ul className="space-y-2">
+              <AnimatePresence initial={false}>
+                {comments.map((c) => (
+                  <motion.li
+                    key={c.id}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.2 }}
+                    className="text-sm rounded-lg bg-gray-50 p-2"
+                  >
+                    <div className="text-xs text-gray-500 mb-1">
+                      {c.nickname ? c.nickname : 'Anónimo'} ·{' '}
+                      {new Date(c.created_at).toLocaleString()}
+                    </div>
+                    <div>{c.body}</div>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+
+              {comments.length === 0 && (
+                <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
+              )}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
+}
+
+/* ========================= Envío de comentario ========================= */
+async function submitComment(
+  submissionId: string,
+  body: string,
+  nickname?: string
+) {
+  const r = await fetch(`/api/comments/${submissionId}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ body, nickname }),
+  });
+  const j = await r.json();
+  if (j.ok) {
+    // El INSERT hará merge en realtime; confirmamos por si acaso:
+    setTimeout(() => {
+      // best-effort, no bloquea
+      fetch(`/api/comments/${submissionId}`).then(() => {});
+    }, 150);
+    return true;
+  } else {
+    alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
+    return false;
+  }
 }
