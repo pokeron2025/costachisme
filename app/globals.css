@@ -60,3 +60,57 @@ html, body {
 html, body { background: var(--bg); color: var(--fg); }
 .theme-night .bg-white { background-color: var(--card) !important; }
 .theme-night .border { border-color: var(--border) !important; }
+/* ===== Variables de tema día/noche ===== */
+:root {
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --muted-fg: #475569;
+  --card: #ffffff;
+  --border: #e5e7eb;
+  /* Fondo del header de día: si quieres blanco sólido, pon #ffffff */
+  --header-bg: #ffffff;
+}
+
+.theme-night {
+  --bg: #0b1220;
+  --fg: #e6edf3;
+  --muted-fg: #9fb0bf;
+  --card: #0f172a;
+  --border: #1f2937;
+  --header-bg: #0f172a; /* header noche oscuro */
+}
+
+/* Aplicación global de colores */
+html, body { background: var(--bg); color: var(--fg); }
+
+.theme-night .bg-white { background-color: var(--card) !important; }
+.theme-night .border { border-color: var(--border) !important; }
+
+/* ===== Header: estados y contraste ===== */
+.site-header {
+  /* color del texto lo decide el script con estas clases */
+}
+
+.header-darktext { color: #0f172a; }
+.header-darktext a { color: #0f172a; }
+.header-darktext a:hover { background-color: rgba(15, 23, 42, 0.08); }
+
+.header-lighttext { color: #ffffff; }
+.header-lighttext a { color: #ffffff; }
+.header-lighttext a:hover { background-color: rgba(255, 255, 255, 0.12); }
+
+/* Sombra cuando está scrolleado */
+.site-header.is-scrolled {
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+}
+
+/* Oculto cuando el usuario hace scroll hacia abajo (lo añade el script) */
+.header-hidden {
+  transform: translateY(-100%);
+}
+
+/* Asegura transitions suaves */
+.site-header {
+  will-change: transform;
+  transition: transform 0.3s ease, box-shadow 0.25s ease;
+}
