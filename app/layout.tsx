@@ -15,7 +15,7 @@ export const metadata = {
   description:
     "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano.",
   icons: {
-    icon: "/logo-icon.svg", // favicon (la CCH o el ícono que uses)
+    icon: "/logo-icon.svg", // cambia a /logo.svg si quieres usar el logo abstracto también como favicon
   },
 };
 
@@ -41,7 +41,6 @@ export default function RootLayout({
                 priority
               />
               <div className="leading-tight">
-                {/* Cambiaste esta línea para mostrar 'Salinacruz' */}
                 <div className="text-lg font-semibold tracking-wide">
                   Salinacruz
                 </div>
@@ -59,7 +58,7 @@ export default function RootLayout({
         {/* CONTENIDO */}
         <main className="container-narrow mx-auto p-4">{children}</main>
 
-        {/* FOOTER (opcional y sencillo) */}
+        {/* FOOTER */}
         <footer className="container-narrow mx-auto px-4 pb-10 pt-6 text-center text-sm opacity-70">
           Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
         </footer>
