@@ -12,7 +12,6 @@ type Submission = {
   content: string;
   barrio: string | null;
   imagen_url?: string | null;
-  // opcionalmente tu campo score si lo sigues mostrando
   score?: number;
 };
 
@@ -30,7 +29,7 @@ type FeedItem = Submission & {
   comments?: Array<{ id: string; body: string; nickname: string | null; created_at: string }>;
 };
 
-// ---------- Validación del formulario de envío ----------
+// ---------- Validación del formulario ----------
 const schema = z.object({
   category: z.enum(['RUMOR', 'REPORTE']),
   title: z
@@ -54,7 +53,7 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-// para pseudo-identificar al votante en el cliente
+// Pseudo-identidad del votante (cliente)
 function getVoter() {
   const k = '__voter_id__';
   let v = typeof window !== 'undefined' ? localStorage.getItem(k) : null;
@@ -65,7 +64,7 @@ function getVoter() {
   return v ?? 'anon';
 }
 
-// para bloquear “re-clicks” de la misma reacción en la sesión del navegador
+// Guardar última reacción local para no spamear clicks en sesión
 function getLocalReacted(submissionId: string) {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('__reacted__') || '{}';
@@ -94,28 +93,32 @@ export default function Home() {
     imagen_url: '',
   });
 
-  // carga inicial
+  // Cargar feed inicial
   async function load() {
-    const r = await fetch('/api/list');
-    const j = await r.json();
-    if (j.ok) {
-      // j.data debe incluir submissions aprobadas; si tu /api/list no trae totals ni comments
-      // lo normalizamos a 0 para que no truene el render.
-      const normalized: FeedItem[] = (j.data as Submission[]).map((s) => ({
-        ...s,
-        totals: {
-          like_count: (s as any).like_count ?? 0,
-          dislike_count: (s as any).dislike_count ?? 0,
-          haha_count: (s as any).haha_count ?? 0,
-          wow_count: (s as any).wow_count ?? 0,
-          angry_count: (s as any).angry_count ?? 0,
-          sad_count: (s as any).sad_count ?? 0,
-        },
-        comments: [],
-      }));
-      setFeed(normalized);
-      // carga comentarios por cada item (opcional: puedes optimizar con endpoint batch)
-      normalized.forEach((it) => fetchComments(it.id));
+    try {
+      const r = await fetch('/api/list', { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok) {
+        const normalized: FeedItem[] = (j.data as Submission[]).map((s) => ({
+          ...s,
+          totals: {
+            like_count: (s as any).like_count ?? 0,
+            dislike_count: (s as any).dislike_count ?? 0,
+            haha_count: (s as any).haha_count ?? 0,
+            wow_count: (s as any).wow_count ?? 0,
+            angry_count: (s as any).angry_count ?? 0,
+            sad_count: (s as any).sad_count ?? 0,
+          },
+          comments: [],
+        }));
+        setFeed(normalized);
+        // opcional: precargar comentarios
+        normalized.forEach((it) => fetchComments(it.id));
+      } else {
+        setMsg(j.error || 'No se pudo cargar el feed.');
+      }
+    } catch (e: any) {
+      setMsg(e?.message || 'Error de red al cargar el feed.');
     }
   }
 
@@ -123,7 +126,7 @@ export default function Home() {
     load();
   }, []);
 
-  // enviar rumor
+  // Enviar rumor/reporte
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -149,11 +152,10 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos (mínimos y máximos).');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos (mínimos y máximimos).');
       } else {
-        setMsg('¡Enviado! Tu publicación quedará visible cuando sea aprobada.');
+        setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
-        // opcional: recargar feed
         load();
       }
     } catch (err: any) {
@@ -163,31 +165,66 @@ export default function Home() {
     }
   }
 
-  // hacer reacción
+  // Hacer reacción (con debug por alert)
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
-    // freno rápido en el cliente para que no spamee
+
+    // Evita re-clicks de la misma reacción en la sesión
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
-    const r = await fetch('/api/react', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: submissionId, reaction: tag, voter }),
-    });
-    const j = await r.json();
+    try {
+      const res = await fetch('/api/react', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: submissionId, reaction: tag, voter }),
+      });
 
-    if (j.ok && j.totals) {
-      setFeed((curr) =>
-        curr.map((it) =>
-          it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it
-        )
-      );
+      const j = await res.json();
+      if (!res.ok || !j.ok) {
+        alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
+        return;
+      }
+
+      // Actualiza contadores desde los totales que regresó el backend (SQL react)
+      if (j.totals) {
+        setFeed((curr) =>
+          curr.map((it) =>
+            it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it
+          )
+        );
+      } else {
+        // Fallback optimista (si el backend no envió totales por alguna razón)
+        setFeed((curr) =>
+          curr.map((it) =>
+            it.id === submissionId
+              ? {
+                  ...it,
+                  totals: {
+                    ...it.totals,
+                    // suma 1 al contador correspondiente
+                    ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
+                    ...(tag === 'dislike'
+                      ? { dislike_count: it.totals.dislike_count + 1 }
+                      : {}),
+                    ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
+                    ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
+                    ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
+                    ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
+                  },
+                }
+              : it
+          )
+        );
+      }
+
       setLocalReacted(submissionId, tag);
+    } catch (err: any) {
+      alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
     }
   }
 
-  // comentarios
+  // Comentarios
   async function fetchComments(submissionId: string) {
     try {
       const r = await fetch(`/api/comments/${submissionId}`);
@@ -198,7 +235,7 @@ export default function Home() {
         );
       }
     } catch {
-      // silencioso
+      /* silent */
     }
   }
 
@@ -214,11 +251,12 @@ export default function Home() {
     });
     const j = await r.json();
     if (j.ok) {
-      // vuelve a cargar comentarios de ese submission
       fetchComments(submissionId);
       return true;
+    } else {
+      alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
+      return false;
     }
-    return false;
   }
 
   const voterId = useMemo(() => getVoter(), []);
@@ -248,7 +286,9 @@ export default function Home() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FORM */}
         <section className="rounded-2xl border p-4">
-          <h2 className="text-lg font-semibold mb-4">Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}</h2>
+          <h2 className="text-lg font-semibold mb-4">
+            Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
+          </h2>
 
           <form onSubmit={submit} className="space-y-3">
             <div>
@@ -330,9 +370,7 @@ export default function Home() {
                   </div>
                   <h3 className="font-semibold">{it.title}</h3>
                   <p className="text-sm mt-1">{it.content}</p>
-                  {it.barrio ? (
-                    <div className="text-xs mt-1">📍 {it.barrio}</div>
-                  ) : null}
+                  {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
                 </div>
 
                 {/* Reacciones */}
@@ -349,11 +387,7 @@ export default function Home() {
                       title={r.label}
                     >
                       <span>{r.code}</span>
-                      <span>
-                        {
-                          (it.totals as any)[r.key] // TS appeasement
-                        }
-                      </span>
+                      <span>{(it.totals as any)[r.key]}</span>
                     </button>
                   ))}
                 </div>
@@ -373,7 +407,7 @@ export default function Home() {
         </section>
       </div>
 
-      {/* Footer pequeño */}
+      {/* Footer */}
       <div className="text-center text-xs text-gray-500 mt-10">
         Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
       </div>
@@ -445,8 +479,7 @@ function CommentsBlock({
             {comments.map((c) => (
               <li key={c.id} className="text-sm rounded-lg bg-gray-50 p-2">
                 <div className="text-xs text-gray-500 mb-1">
-                  {c.nickname ? c.nickname : 'Anónimo'} ·{' '}
-                  {new Date(c.created_at).toLocaleString()}
+                  {c.nickname ? c.nickname : 'Anónimo'} · {new Date(c.created_at).toLocaleString()}
                 </div>
                 <div>{c.body}</div>
               </li>
@@ -459,4 +492,4 @@ function CommentsBlock({
       )}
     </div>
   );
-  }
+}
