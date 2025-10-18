@@ -1,47 +1,68 @@
+// app/layout.tsx
 import "./globals.css";
 import { Poppins } from "next/font/google";
 import Image from "next/image";
 import React from "react";
 import ThemeToggle from "./components/ThemeToggle";
+
 const poppins = Poppins({
   subsets: ["latin"],
   weight: ["400", "600", "700"],
 });
 
-
 export const metadata = {
   title: "Costachisme — Rumores, risas y voz ciudadana",
-  description: "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadana.",
+  description:
+    "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano.",
   icons: {
-    icon: "/logo-icon.svg", // aquí va tu ícono redondo que guardaste en public
+    icon: "/logo-icon.svg", // favicon (la CCH o el ícono que uses)
   },
 };
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="es">
-      <body className={`${poppins.className} min-h-screen bg-white text-[#111827]`}>
+    <html lang="es" suppressHydrationWarning>
+      <body className={`${poppins.className} min-h-screen`}>
         {/* HEADER */}
-        <header className="sticky top-0 z-30 border-b bg-[#2f7f72]/95 backdrop-blur supports-[backdrop-filter]:bg-[#2f7f72]/80">
-          <div className="mx-auto max-w-5xl flex items-center gap-3 p-3 text-white">
-            <Image
-              src="/logo.svg"
-              alt="Costachisme"
-              width={50}   // más grande que antes
-              height={50}
-              className="rounded"
-              priority
-            />
-            <div className="leading-tight ml-2">
-           <h1 className="text-3xl font-extrabold bg-gradient-to-r from-green-400 via-blue-500 to-purple-600 bg-clip-text text-transparent drop-shadow-md">
-  Salinacruz
-</h1> 
-              <p className="text-[12px] opacity-80">Rumores, risas y voz ciudadana</p>
+        <header className="sticky top-0 z-30 border-b border-black/5 dark:border-white/10 bg-brand-500/95 text-white backdrop-blur supports-[backdrop-filter]:bg-brand-500/80">
+          <div className="container-narrow flex items-center justify-between gap-3 p-3">
+            {/* IZQUIERDA: logo + textos */}
+            <div className="flex items-center gap-3">
+              <Image
+                src="/logo.svg"
+                alt="Logo"
+                width={40}
+                height={40}
+                className="rounded-xl shadow soft"
+                priority
+              />
+              <div className="leading-tight">
+                {/* Cambiaste esta línea para mostrar 'Salinacruz' */}
+                <div className="text-lg font-semibold tracking-wide">
+                  Salinacruz
+                </div>
+                <p className="text-[12px] opacity-90">
+                  Rumores, risas y voz ciudadana
+                </p>
+              </div>
             </div>
+
+            {/* DERECHA: botón modo claro/oscuro */}
+            <ThemeToggle />
           </div>
         </header>
 
         {/* CONTENIDO */}
-        <main className="mx-auto max-w-5xl p-4">{children}</main>
+        <main className="container-narrow mx-auto p-4">{children}</main>
+
+        {/* FOOTER (opcional y sencillo) */}
+        <footer className="container-narrow mx-auto px-4 pb-10 pt-6 text-center text-sm opacity-70">
+          Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
+        </footer>
       </body>
     </html>
   );
