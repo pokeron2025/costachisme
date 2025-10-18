@@ -94,43 +94,6 @@ export default function Home() {
     imagen_url: '',
   });
 
-  // >>> Realtime: throttle para refrescar el feed sin spam
-  const refreshTimer = React.useRef<NodeJS.Timeout | null>(null);
-  const scheduleRefresh = () => {
-    if (refreshTimer.current) return; // ya hay uno programado
-    refreshTimer.current = setTimeout(() => {
-      refreshTimer.current = null;
-      load(); // vuelve a cargar el feed
-    }, 250); // 250ms de debounce
-  };
-
-  // >>> Realtime: suscripción a cambios en reactions y comments
-  React.useEffect(() => {
-    const channel = supabaseBrowser
-      .channel('public:reactions-comments')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'reactions' },
-        (_payload) => {
-          scheduleRefresh();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'comments' },
-        (_payload) => {
-          scheduleRefresh();
-        }
-      )
-      .subscribe((_status) => {
-        // Opcional: console.log('Realtime status', _status);
-      });
-
-    return () => {
-      supabaseBrowser.removeChannel(channel);
-    };
-  }, []); // se monta una sola vez
-
   // Cargar feed inicial
   async function load() {
     try {
@@ -150,7 +113,7 @@ export default function Home() {
           comments: [],
         }));
         setFeed(normalized);
-        // opcional: precargar comentarios
+        // precargar comentarios
         normalized.forEach((it) => fetchComments(it.id));
       } else {
         setMsg(j.error || 'No se pudo cargar el feed.');
@@ -190,7 +153,7 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos (mínimos y máximimos).');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
       } else {
         setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
@@ -203,11 +166,24 @@ export default function Home() {
     }
   }
 
-  // Hacer reacción (con debug por alert)
+  // Refresca SOLO los totales de una publicación
+  async function refreshOne(submissionId: string) {
+    try {
+      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok && j.data) {
+        setFeed((curr) =>
+          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.data } : it))
+        );
+      }
+    } catch {
+      /* silent */
+    }
+  }
+
+  // Hacer reacción
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
-
-    // Evita re-clicks de la misma reacción en la sesión
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
@@ -224,38 +200,8 @@ export default function Home() {
         return;
       }
 
-      // Actualiza contadores desde los totales que regresó el backend (SQL react)
-      if (j.totals) {
-        setFeed((curr) =>
-          curr.map((it) =>
-            it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it
-          )
-        );
-      } else {
-        // Fallback optimista (si el backend no envió totales por alguna razón)
-        setFeed((curr) =>
-          curr.map((it) =>
-            it.id === submissionId
-              ? {
-                  ...it,
-                  totals: {
-                    ...it.totals,
-                    // suma 1 al contador correspondiente
-                    ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
-                    ...(tag === 'dislike'
-                      ? { dislike_count: it.totals.dislike_count + 1 }
-                      : {}),
-                    ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
-                    ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
-                    ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
-                    ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
-                  },
-                }
-              : it
-          )
-        );
-      }
-
+      // actualiza desde backend
+      await refreshOne(submissionId);
       setLocalReacted(submissionId, tag);
     } catch (err: any) {
       alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
@@ -277,11 +223,7 @@ export default function Home() {
     }
   }
 
-  async function submitComment(
-    submissionId: string,
-    body: string,
-    nickname: string | undefined
-  ) {
+  async function submitComment(submissionId: string, body: string, nickname: string | undefined) {
     const r = await fetch(`/api/comments/${submissionId}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -298,6 +240,25 @@ export default function Home() {
   }
 
   const voterId = useMemo(() => getVoter(), []);
+
+  // Realtime
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('public:reactions-comments')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
+        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) refreshOne(sid);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
+        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) fetchComments(sid);
+      })
+      .subscribe();
+
+    return () => {
+      supabaseBrowser.removeChannel(channel);
+    };
+  }, []);
 
   return (
     <main className="mx-auto max-w-5xl p-4">
@@ -337,7 +298,6 @@ export default function Home() {
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               />
-              <p className="text-xs text-gray-500 mt-1">Mínimo 5 y máximo 80 caracteres.</p>
             </div>
 
             <div>
@@ -348,7 +308,6 @@ export default function Home() {
                 value={form.content}
                 onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
               />
-              <p className="text-xs text-gray-500 mt-1">Mínimo 12 y máximo 400 caracteres.</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -395,17 +354,12 @@ export default function Home() {
           {feed.map((it) => {
             const reacted = getLocalReacted(it.id);
             return (
-              <article
-                key={it.id}
-                className="rounded-2xl border p-4 flex flex-col gap-3 bg-white"
-              >
+              <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white">
                 <div className="text-xs text-gray-500">
                   {new Date(it.created_at).toLocaleString()}
                 </div>
                 <div>
-                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">
-                    {it.category}
-                  </div>
+                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
                   <h3 className="font-semibold">{it.title}</h3>
                   <p className="text-sm mt-1">{it.content}</p>
                   {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
@@ -514,20 +468,4 @@ function CommentsBlock({
           </form>
 
           <ul className="space-y-2">
-            {comments.map((c) => (
-              <li key={c.id} className="text-sm rounded-lg bg-gray-50 p-2">
-                <div className="text-xs text-gray-500 mb-1">
-                  {c.nickname ? c.nickname : 'Anónimo'} · {new Date(c.created_at).toLocaleString()}
-                </div>
-                <div>{c.body}</div>
-              </li>
-            ))}
-            {comments.length === 0 && (
-              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
-            )}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
+            {comments.map((c)
