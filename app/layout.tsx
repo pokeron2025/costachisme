@@ -46,30 +46,11 @@ export default function RootLayout({
 
             {/* Navegación (enlaces placeholder hasta crear las páginas) */}
             <nav className="ml-auto flex items-center gap-3 text-[14px]">
-              <Link
-                href="/"
-                className="px-3 py-1 rounded hover:bg-white/10 transition"
-              >
-                Inicio
-              </Link>
-              {/* Cuando exista /contacto y /acerca, quita el # */}
-              <a
-                href="#"
-                className="px-3 py-1 rounded hover:bg-white/10 transition opacity-70 cursor-not-allowed"
-                aria-disabled="true"
-                title="Pronto"
-              >
-                Contacto
-              </a>
-              <a
-                href="#"
-                className="px-3 py-1 rounded hover:bg-white/10 transition opacity-70 cursor-not-allowed"
-                aria-disabled="true"
-                title="Pronto"
-              >
-                Acerca
-              </a>
-            </nav>
+  <Link href="/" className="px-3 py-1 rounded hover:bg-white/10 transition">Inicio</Link>
+  <Link href="/contacto" className="px-3 py-1 rounded hover:bg-white/10 transition">Contacto</Link>
+  <Link href="/acerca" className="px-3 py-1 rounded hover:bg-white/10 transition">Acerca</Link>
+</nav>
+              
           </div>
         </header>
 
