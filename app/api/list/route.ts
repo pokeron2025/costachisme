@@ -1,17 +1,19 @@
+// app/api/list/route.ts
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY! // ojo: service key para poder leer flagged/approved sin limitaciones
 );
 
 export async function GET() {
-  // saca tus aprobados; ajusta columnas según tu esquema
+  // obtenemos aprobados y no marcados como flagged
   const { data: subs, error } = await supabase
     .from('submissions')
-    .select('id, created_at, category, title, content, barrio, imagen_url')
-    .eq('status', 'approved')
+    .select('id, created_at, category, title, content, barrio, imagen_url, flagged')
+    .eq('status', 'APPROVED')
+    .or('flagged.is.null,flagged.eq.false')
     .order('created_at', { ascending: false })
     .limit(100);
 
@@ -19,13 +21,15 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  // pides totales de un jalón
-  const ids = (subs ?? []).map(s => s.id);
+  // pides totales de reacciones
+  const ids = (subs ?? []).map((s) => s.id);
   let totalsById: Record<string, any> = {};
   if (ids.length) {
     const { data: totals, error: terr } = await supabase
       .from('reaction_totals')
-      .select('submission_id, like_count, dislike_count, haha_count, wow_count, angry_count, sad_count')
+      .select(
+        'submission_id, like_count, dislike_count, haha_count, wow_count, angry_count, sad_count'
+      )
       .in('submission_id', ids);
 
     if (!terr && totals) {
@@ -36,7 +40,8 @@ export async function GET() {
     }
   }
 
-  const withTotals = (subs ?? []).map(s => ({
+  // mezclamos con los totales
+  const withTotals = (subs ?? []).map((s) => ({
     ...s,
     like_count: totalsById[s.id]?.like_count ?? 0,
     dislike_count: totalsById[s.id]?.dislike_count ?? 0,
