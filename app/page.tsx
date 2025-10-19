@@ -101,6 +101,9 @@ const schema = z.object({
   imagen_url: z.string().url().optional().or(z.literal("")),
 });
 
+/* =======================
+   Botón de Reacción con animación
+======================= */
 function ReactionButton({
   emoji,
   count,
@@ -115,17 +118,13 @@ function ReactionButton({
   onClick: () => void;
 }) {
   const [burstKey, setBurstKey] = useState(0);
-  const [burstVisible, setBurstVisible] = useState(false); // controla la capa flotante
+  const [burstVisible, setBurstVisible] = useState(false);
 
   const handle = () => {
-    // dispara tu lógica normal
     onClick();
-
-    // muestra el clon que sube y programa su desmontaje
     setBurstKey((k) => k + 1);
     setBurstVisible(true);
-    // desmonta tras la animación para que no se quede arriba
-    window.setTimeout(() => setBurstVisible(false), 500); // 450ms anim + margen
+    window.setTimeout(() => setBurstVisible(false), 500);
   };
 
   return (
@@ -136,7 +135,6 @@ function ReactionButton({
       className={`relative px-3 py-1 rounded-full border text-sm flex items-center gap-1 transition
         ${active ? "bg-emerald-50 border-emerald-300" : "bg-white hover:bg-gray-50"}`}
     >
-      {/* emoji base con micro-rebote */}
       <motion.span
         layout="position"
         whileTap={{ scale: 0.85 }}
@@ -147,7 +145,6 @@ function ReactionButton({
 
       <span>{count}</span>
 
-      {/* clon flotante → sólo se pinta mientras burstVisible=true */}
       <AnimatePresence initial={false}>
         {burstVisible && (
           <motion.span
@@ -165,6 +162,7 @@ function ReactionButton({
     </button>
   );
 }
+
 /* =======================
    Página
 ======================= */
@@ -218,7 +216,6 @@ export default function Home() {
         comments: [],
       }));
       setFeed(normalized);
-      // precarga comentarios de los visibles
       normalized.slice(0, 10).forEach((it) => fetchComments(it.id));
     } catch (e: any) {
       setMsg(e?.message || "Error al cargar publicaciones");
@@ -319,7 +316,6 @@ export default function Home() {
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "No se pudo reaccionar");
 
-      // actualiza contadores desde backend
       if (j.totals) {
         setFeed((curr) =>
           curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals } : it))
@@ -331,19 +327,19 @@ export default function Home() {
     }
   }
 
-  // reportar
+  // reportar (CORREGIDO → envía { submissionId, reason, voter })
   async function report(submissionId: string) {
-    if (getReported(submissionId)) return; // ya reportado en este dispositivo
+    if (getReported(submissionId)) return;
 
     const reason = prompt("¿Por qué la reportas?");
     if (!reason || reason.trim().length < 3) return;
 
-    const voter = getVoter(); // asegura voter
+    const voter = getVoter();
     try {
       const r = await fetch("/api/report", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: submissionId, reason, voter }),
+        body: JSON.stringify({ submissionId, reason, voter }), // 👈 clave correcta
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "No se pudo reportar");
@@ -540,8 +536,7 @@ export default function Home() {
                   onClick={() => report(it.id)}
                   disabled={disabledReport}
                   className={`absolute right-3 top-3 px-3 py-1 rounded-full border text-sm
-                    ${disabledReport ? "opacity-50 cursor-not-allowed" : "hover:bg-rose-50"}
-                    `}
+                    ${disabledReport ? "opacity-50 cursor-not-allowed" : "hover:bg-rose-50"}`}
                   title={disabledReport ? "Ya reportaste esta publicación" : "Reportar"}
                 >
                   🚩 Reportar
@@ -663,4 +658,4 @@ function CommentsBlock({
       )}
     </div>
   );
-              }
+}
