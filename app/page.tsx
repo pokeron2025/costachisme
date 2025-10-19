@@ -54,6 +54,7 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
+// Filtros con figuritas
 const FILTERS: Array<{ id: string; label: string; icon: string }> = [
   { id: 'recent', label: 'Recientes', icon: '🆕' },
   { id: 'popular', label: 'Populares', icon: '🔥' },
@@ -61,7 +62,7 @@ const FILTERS: Array<{ id: string; label: string; icon: string }> = [
   { id: 'viewed', label: 'Vistos', icon: '👀' },
 ];
 
-// si quieres que el contador de reportes solo se vea con ?admin=1
+// Modo admin (contador de reportes se muestra con ?admin=1)
 const useIsAdmin = () => {
   const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
@@ -214,6 +215,7 @@ export default function Home() {
             sad_count: (s as any).sad_count ?? 0,
           },
           comments: [],
+          report_count: (s as any).report_count ?? 0,
         }));
         setFeed(norm);
         norm.forEach((it) => fetchComments(it.id));
@@ -278,7 +280,7 @@ export default function Home() {
     if (already === tag) return;
 
     try {
-      // Optimista para que el contador “pop” de inmediato
+      // Optimista para que el contador “pop” y el burst salgan de inmediato
       setFeed((curr) =>
         curr.map((it) =>
           it.id === submissionId
@@ -496,7 +498,7 @@ export default function Home() {
 
             return (
               <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white relative">
-                {/* Reportar */}
+                {/* Reportar (arriba derecha) */}
                 <button
                   className={`absolute right-3 top-3 px-3 py-1 rounded-full text-sm flex items-center gap-2 shadow-sm ${
                     reported ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-red-50 text-red-600 hover:bg-red-100'
@@ -519,7 +521,7 @@ export default function Home() {
                   ) : null}
                 </div>
 
-                {/* Reacciones con animación */}
+                {/* Reacciones con animación (burst) */}
                 <div className="flex flex-wrap items-center gap-2">
                   {REACTIONS.map((r) => (
                     <ReactionButton
@@ -584,7 +586,7 @@ export default function Home() {
   );
 }
 
-/* ──────────────────── Botón de reacción con animaciones ──────────────────── */
+/* ──────────────────── Botón de reacción con burst ──────────────────── */
 function ReactionButton({
   emoji,
   count,
@@ -598,19 +600,29 @@ function ReactionButton({
   title: string;
   onClick: () => void;
 }) {
+  // cada click incrementa para forzar un nuevo "burst"
+  const [burstId, setBurstId] = React.useState(0);
+
+  const handleClick = () => {
+    setBurstId((n) => n + 1);
+    onClick();
+  };
+
   return (
     <motion.button
-      onClick={onClick}
+      onClick={handleClick}
       title={title}
       className={[
+        'relative', // para posicionar el burst
         'px-3 py-1 rounded-full border text-sm flex items-center gap-1',
         active ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50',
       ].join(' ')}
-      whileTap={{ scale: 0.9 }}
+      whileTap={{ scale: 0.92 }}
       animate={{ scale: active ? 1.06 : 1 }}
       transition={{ type: 'spring', stiffness: 420, damping: 22 }}
       layout
     >
+      {/* emoji base con pequeño wobble si queda activo */}
       <motion.span
         key={active ? 'on' : 'off'}
         initial={{ rotate: 0 }}
@@ -630,6 +642,21 @@ function ReactionButton({
           transition={{ duration: 0.18 }}
         >
           {count}
+        </motion.span>
+      </AnimatePresence>
+
+      {/* ✨ BURST: el mismo emoji “sube y se desvanece” en cada click */}
+      <AnimatePresence>
+        <motion.span
+          key={`burst-${burstId}`}
+          className="absolute left-1/2 -translate-x-1/2"
+          initial={{ y: 0, opacity: 0 }}
+          animate={{ y: -22, opacity: 1 }}
+          exit={{ y: -36, opacity: 0 }}
+          transition={{ duration: 0.45, ease: 'easeOut' }}
+          style={{ pointerEvents: 'none' }}
+        >
+          {emoji}
         </motion.span>
       </AnimatePresence>
     </motion.button>
@@ -708,4 +735,4 @@ function CommentsBlock({
       )}
     </div>
   );
-}
+        }
