@@ -3,13 +3,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-// Supabase (keys públicas del cliente)
+// Supabase (usa tus keys públicas ya configuradas)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Validación (igual que en el cliente)
+// Validación de los datos
 const schema = z.object({
   category: z.enum(["RUMOR", "REPORTE"]),
   title: z.string().min(5).max(80),
@@ -18,7 +18,7 @@ const schema = z.object({
   imagen_url: z.string().url().optional().or(z.literal("")),
 });
 
-// Notificación a Discord (opcional)
+// Notificación a Discord
 async function notifyDiscord(payload: {
   category: "RUMOR" | "REPORTE";
   title: string;
@@ -27,22 +27,22 @@ async function notifyDiscord(payload: {
 }) {
   const url =
     process.env.DISCORD_PUBLISH_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL;
-  if (!url) return;
+  if (!url) return; // sin webhook, no notificamos
 
   const { category, title, content, barrio } = payload;
-  const icon = category === "RUMOR" ? "📰 Rumor" : "📮 Buzón";
-  const preview = content.length > 200 ? content.slice(0, 200).trimEnd() + "…" : content;
 
-  const body = {
-    content: [
-      `**${icon} nuevo**`,
-      `• **Título:** ${title}`,
-      `• **Texto:** ${preview}`,
-      barrio ? `• **Barrio/Colonia:** ${barrio}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
+  const icon = category === "RUMOR" ? "📰 Rumor" : "📮 Buzón";
+  const preview =
+    content.length > 200 ? content.slice(0, 200).trimEnd() + "…" : content;
+
+  const lines = [
+    `**${icon} nuevo**`,
+    `• **Título:** ${title}`,
+    `• **Texto:** ${preview}`,
+    barrio ? `• **Barrio/Colonia:** ${barrio}` : null,
+  ].filter(Boolean);
+
+  const body = { content: lines.join("\n") };
 
   await fetch(url, {
     method: "POST",
@@ -62,37 +62,37 @@ export async function POST(req: Request) {
 
     const { category, title, content, barrio, imagen_url } = parsed.data;
 
-    // Normaliza opcionales a null
+    // Normalizar strings opcionales a null
     const barrioNorm = barrio?.trim() ? barrio.trim() : null;
     const imgNorm = imagen_url?.trim() ? imagen_url.trim() : null;
 
-    // Inserta como 'pending' y NO hagas SELECT después
+    // Insertar en submissions con status "pending"
     const { error } = await supabase
       .from("submissions")
-      .insert(
-        [
-          {
-            category,
-            title: title.trim(),
-            content: content.trim(),
-            barrio: barrioNorm,
-            imagen_url: imgNorm,
-            status: "pending",
-          },
-        ],
-        { returning: "minimal" } // <- clave: evita SELECT post-insert
-      );
+      .insert([
+        {
+          category,
+          title: title.trim(),
+          content: content.trim(),
+          barrio: barrioNorm,
+          imagen_url: imgNorm,
+          status: "pending", // 👈 quedará visible cuando lo apruebes
+        },
+      ]);
 
     if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: error.message },
+        { status: 500 }
+      );
     }
 
-    // Notifica a Discord (no bloqueante)
+    // Notificar a Discord (no bloquea la respuesta si falla)
     notifyDiscord({
       category,
       title: title.trim(),
       content: content.trim(),
-      barrio: barrioNorm,
+      barrio: barrioNorm ?? undefined,
     }).catch(() => {});
 
     return NextResponse.json({ ok: true });
