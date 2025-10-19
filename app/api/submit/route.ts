@@ -3,13 +3,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-// Supabase (usa tus keys públicas ya configuradas)
+// Supabase (keys públicas del cliente)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Validación: igual que en tu cliente
+// Validación (igual que en el cliente)
 const schema = z.object({
   category: z.enum(["RUMOR", "REPORTE"]),
   title: z.string().min(5).max(80),
@@ -18,7 +18,7 @@ const schema = z.object({
   imagen_url: z.string().url().optional().or(z.literal("")),
 });
 
-// Enviar a Discord (si hay webhook configurado)
+// Notificación a Discord (opcional)
 async function notifyDiscord(payload: {
   category: "RUMOR" | "REPORTE";
   title: string;
@@ -27,22 +27,22 @@ async function notifyDiscord(payload: {
 }) {
   const url =
     process.env.DISCORD_PUBLISH_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL;
-  if (!url) return; // sin webhook, no notificamos
+  if (!url) return;
 
   const { category, title, content, barrio } = payload;
-
   const icon = category === "RUMOR" ? "📰 Rumor" : "📮 Buzón";
-  const preview =
-    content.length > 200 ? content.slice(0, 200).trimEnd() + "…" : content;
+  const preview = content.length > 200 ? content.slice(0, 200).trimEnd() + "…" : content;
 
-  const lines = [
-    `**${icon} nuevo**`,
-    `• **Título:** ${title}`,
-    `• **Texto:** ${preview}`,
-    barrio ? `• **Barrio/Colonia:** ${barrio}` : null,
-  ].filter(Boolean);
-
-  const body = { content: lines.join("\n") };
+  const body = {
+    content: [
+      `**${icon} nuevo**`,
+      `• **Título:** ${title}`,
+      `• **Texto:** ${preview}`,
+      barrio ? `• **Barrio/Colonia:** ${barrio}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
 
   await fetch(url, {
     method: "POST",
@@ -62,40 +62,40 @@ export async function POST(req: Request) {
 
     const { category, title, content, barrio, imagen_url } = parsed.data;
 
-    // Normalizar strings opcionales a null
+    // Normaliza opcionales a null
     const barrioNorm = barrio?.trim() ? barrio.trim() : null;
     const imgNorm = imagen_url?.trim() ? imagen_url.trim() : null;
 
-    // Insertar en submissions con moderación ("pending")
-    const { data, error } = await supabase
+    // Inserta como 'pending' y NO hagas SELECT después
+    const { error } = await supabase
       .from("submissions")
-      .insert({
-        category,
-        title: title.trim(),
-        content: content.trim(),
-        barrio: barrioNorm,
-        imagen_url: imgNorm,
-        status: "pending", // 👈 quedará visible cuando lo apruebes
-      })
-      .select()
-      .single();
+      .insert(
+        [
+          {
+            category,
+            title: title.trim(),
+            content: content.trim(),
+            barrio: barrioNorm,
+            imagen_url: imgNorm,
+            status: "pending",
+          },
+        ],
+        { returning: "minimal" } // <- clave: evita SELECT post-insert
+      );
 
     if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ ok: false, error: error.message }, { status: 400 });
     }
 
-    // Notificar a Discord (no bloquea la respuesta si falla)
+    // Notifica a Discord (no bloqueante)
     notifyDiscord({
       category,
       title: title.trim(),
       content: content.trim(),
-      barrio: barrioNorm ?? undefined,
+      barrio: barrioNorm,
     }).catch(() => {});
 
-    return NextResponse.json({ ok: true, data });
+    return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: e?.message || "Error inesperado" },
