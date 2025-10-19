@@ -114,13 +114,18 @@ function ReactionButton({
   title: string;
   onClick: () => void;
 }) {
-  const [burst, setBurst] = useState(0); // contador de clics (para crear una clave distinta)
-  const [showBurst, setShowBurst] = useState(false); // <- NUEVO: evita animar en el primer render
+  const [burstKey, setBurstKey] = useState(0);
+  const [burstVisible, setBurstVisible] = useState(false); // controla la capa flotante
 
   const handle = () => {
-    setShowBurst(true);           // habilita la capa animada después del primer click
-    setBurst((b) => b + 1);
+    // dispara tu lógica normal
     onClick();
+
+    // muestra el clon que sube y programa su desmontaje
+    setBurstKey((k) => k + 1);
+    setBurstVisible(true);
+    // desmonta tras la animación para que no se quede arriba
+    window.setTimeout(() => setBurstVisible(false), 500); // 450ms anim + margen
   };
 
   return (
@@ -134,7 +139,7 @@ function ReactionButton({
       {/* emoji base con micro-rebote */}
       <motion.span
         layout="position"
-        whileTap={{ scale: 0.8 }}
+        whileTap={{ scale: 0.85 }}
         transition={{ type: "spring", stiffness: 500, damping: 20 }}
       >
         {emoji}
@@ -142,11 +147,11 @@ function ReactionButton({
 
       <span>{count}</span>
 
-      {/* clon que sube y se desvanece (SOLO después de haber clickeado al menos una vez) */}
-      <AnimatePresence>
-        {showBurst && (
+      {/* clon flotante → sólo se pinta mientras burstVisible=true */}
+      <AnimatePresence initial={false}>
+        {burstVisible && (
           <motion.span
-            key={burst}
+            key={burstKey}
             className="absolute inset-0 flex items-center justify-center pointer-events-none"
             initial={{ y: 0, opacity: 0 }}
             animate={{ y: -22, opacity: 1 }}
@@ -160,7 +165,6 @@ function ReactionButton({
     </button>
   );
 }
-
 /* =======================
    Página
 ======================= */
