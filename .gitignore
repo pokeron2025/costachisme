@@ -1,0 +1,15 @@
+# dependencias
+node_modules/
+
+# build output
+.next/
+out/
+build/
+
+# configuración local
+.vscode/
+.DS_Store
+*.log
+
+# vercel
+.vercel/
