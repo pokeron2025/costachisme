@@ -65,14 +65,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           <div className="inner mx-auto max-w-6xl px-4 flex items-center gap-3">
             <Link href="/" className="brand flex items-center gap-3 no-underline">
-              <Image
-                src="/logo.svg"
-                alt="Costachisme"
-                width={28}
-                height={28}
-                className="logo rounded"
-                priority
-              />
+              
               <div className="leading-tight">
                 <p className="brand-title font-medium tracking-wide">Salina Cruz</p>
                 <p className="brand-sub opacity-80">Rumores, risas y voz ciudadana</p>
