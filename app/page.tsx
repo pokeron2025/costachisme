@@ -292,26 +292,35 @@ export default function Home() {
     }
   }
 
-  // ------- reportar (usa /api/report) -------
-  async function report(submissionId: string, reason: string) {
-    try {
-      const r = await fetch('/api/report', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ submissionId, reason }),
-      });
-      const j = await r.json();
-      if (!j.ok) {
-        alert('No se pudo reportar: ' + (j.error || 'desconocido'));
-        return false;
+  // Reemplaza tu función report() por esta
+async function report(submissionId: string, reason: string) {
+  try {
+    const r = await fetch('/api/report', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ submissionId, reason, voter: getVoter() }),
+    });
+    const j = await r.json();
+
+    if (!r.ok || !j.ok) {
+      // Mensajes claros según código
+      if (r.status === 409) {
+        alert('Ya reportaste esta publicación desde este dispositivo.');
+      } else if (r.status === 429) {
+        alert('Has alcanzado el límite de reportes por hora. Intenta más tarde.');
+      } else {
+        alert('No se pudo reportar: ' + (j?.error || 'desconocido'));
       }
-      alert('✅ Reporte enviado. ¡Gracias!');
-      return true;
-    } catch (e: any) {
-      alert('⚠️ Fallo de red al reportar: ' + (e?.message || 'sin detalle'));
       return false;
     }
+
+    alert('✅ Reporte enviado. ¡Gracias!');
+    return true;
+  } catch (e: any) {
+    alert('⚠️ Fallo de red al reportar: ' + (e?.message || 'sin detalle'));
+    return false;
   }
+}
 
   // ------- filtros + sort -------
   const filtered = useMemo(() => {
