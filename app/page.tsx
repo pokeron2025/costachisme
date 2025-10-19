@@ -101,9 +101,6 @@ const schema = z.object({
   imagen_url: z.string().url().optional().or(z.literal("")),
 });
 
-/* =======================
-   Botón de reacción (con animación “sube y se desvanece”)
-======================= */
 function ReactionButton({
   emoji,
   count,
@@ -117,9 +114,11 @@ function ReactionButton({
   title: string;
   onClick: () => void;
 }) {
-  const [burst, setBurst] = useState(0); // para disparar la animación ascendente
+  const [burst, setBurst] = useState(0); // contador de clics (para crear una clave distinta)
+  const [showBurst, setShowBurst] = useState(false); // <- NUEVO: evita animar en el primer render
 
   const handle = () => {
+    setShowBurst(true);           // habilita la capa animada después del primer click
     setBurst((b) => b + 1);
     onClick();
   };
@@ -132,7 +131,7 @@ function ReactionButton({
       className={`relative px-3 py-1 rounded-full border text-sm flex items-center gap-1 transition
         ${active ? "bg-emerald-50 border-emerald-300" : "bg-white hover:bg-gray-50"}`}
     >
-      {/* emoji base + micro rebote */}
+      {/* emoji base con micro-rebote */}
       <motion.span
         layout="position"
         whileTap={{ scale: 0.8 }}
@@ -140,20 +139,23 @@ function ReactionButton({
       >
         {emoji}
       </motion.span>
+
       <span>{count}</span>
 
-      {/* clon que sube y se desvanece */}
+      {/* clon que sube y se desvanece (SOLO después de haber clickeado al menos una vez) */}
       <AnimatePresence>
-        <motion.span
-          key={burst}
-          className="absolute inset-0 flex items-center justify-center pointer-events-none"
-          initial={{ y: 0, opacity: 0 }}
-          animate={{ y: -22, opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.45, ease: "easeOut" }}
-        >
-          <span className="text-lg">{emoji}</span>
-        </motion.span>
+        {showBurst && (
+          <motion.span
+            key={burst}
+            className="absolute inset-0 flex items-center justify-center pointer-events-none"
+            initial={{ y: 0, opacity: 0 }}
+            animate={{ y: -22, opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.45, ease: "easeOut" }}
+          >
+            <span className="text-lg">{emoji}</span>
+          </motion.span>
+        )}
       </AnimatePresence>
     </button>
   );
