@@ -1,8 +1,9 @@
+// app/page.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 
 /* ─────────────────────── Tipos ─────────────────────── */
@@ -16,7 +17,6 @@ type Submission = {
   content: string;
   barrio: string | null;
   imagen_url?: string | null;
-  // opcionales que puede regresar /api/list
   report_count?: number;
 };
 
@@ -54,7 +54,6 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-// filtros con figuritas (iconos)
 const FILTERS: Array<{ id: string; label: string; icon: string }> = [
   { id: 'recent', label: 'Recientes', icon: '🆕' },
   { id: 'popular', label: 'Populares', icon: '🔥' },
@@ -62,22 +61,55 @@ const FILTERS: Array<{ id: string; label: string; icon: string }> = [
   { id: 'viewed', label: 'Vistos', icon: '👀' },
 ];
 
-// para admin-only; si quieres usa ENV o jwt
-const isAdmin = false;
+// si quieres que el contador de reportes solo se vea con ?admin=1
+const useIsAdmin = () => {
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      setIsAdmin(params.get('admin') === '1');
+    }
+  }, []);
+  return isAdmin;
+};
 
-/* Identidad “voter” local */
+/* Identidad “voter” local robusta */
 function getVoter() {
-  const K = '__voter_id__';
-  if (typeof window === 'undefined') return 'anon';
-  let v = localStorage.getItem(K);
-  if (!v) {
-    v = 'anon_' + Math.random().toString(36).slice(2);
-    localStorage.setItem(K, v);
+  const KEY = '__voter_id__';
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      let v = localStorage.getItem(KEY);
+      if (!v) {
+        v = `anon_${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(KEY, v);
+      }
+      return v;
+    }
+  } catch {}
+  try {
+    if (typeof document !== 'undefined') {
+      const m = document.cookie.match(/(?:^|;\s*)__voter_id__=([^;]+)/);
+      if (m?.[1]) return decodeURIComponent(m[1]);
+      const v = `anon_${Math.random().toString(36).slice(2)}`;
+      document.cookie = `__voter_id__=${encodeURIComponent(v)}; path=/; samesite=lax`;
+      return v;
+    }
+  } catch {}
+  // fallback memoria
+  // @ts-ignore
+  if (typeof window !== 'undefined') {
+    // @ts-ignore
+    if (!window.__tmp_voter_id__) {
+      // @ts-ignore
+      window.__tmp_voter_id__ = `anon_${Math.random().toString(36).slice(2)}`;
+    }
+    // @ts-ignore
+    return window.__tmp_voter_id__;
   }
-  return v;
+  return 'anon';
 }
 
-/* Última reacción usada por publicación (en esta device) */
+/* almacenamiento local para reacciones/reportes */
 function getLocalReacted(submissionId: string) {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('__reacted__') || '{}';
@@ -91,8 +123,6 @@ function setLocalReacted(submissionId: string, reaction: string) {
   map[submissionId] = reaction;
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
-
-/* Reporte usado por publicación (en esta device) */
 function getReported(submissionId: string) {
   if (typeof window === 'undefined') return false;
   const raw = localStorage.getItem('__reported__') || '{}';
@@ -107,37 +137,35 @@ function setReported(submissionId: string) {
   localStorage.setItem('__reported__', JSON.stringify(map));
 }
 
-/* ───────────────────────── Página ───────────────────────── */
+/* ─────────────────────── Página ─────────────────────── */
 export default function Home() {
-  // pestaña de envío
   const [tab, setTab] = useState<Category>('RUMOR');
-
-  // filtros (figuritas)
   const [filter, setFilter] = useState<string>('recent');
 
   const [loading, setLoading] = useState(false);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // formulario envío
   const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
 
-  // modal de reportar
+  // reporte
   const [reportingId, setReportingId] = useState<string | null>(null);
   const [reportText, setReportText] = useState('');
   const [reportSending, setReportSending] = useState(false);
 
-  // debounce refresco general
+  const isAdmin = useIsAdmin();
+
+  // refresco general con debounce
   const refreshTimer = useRef<NodeJS.Timeout | null>(null);
   const scheduleRefresh = () => {
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
       refreshTimer.current = null;
-      load(); // reload preservando filtro
+      load();
     }, 250);
   };
 
-  // refrescar solo una publicación (totales de reacciones)
+  // refrescar solo una (totales reacciones)
   async function refreshOne(submissionId: string) {
     try {
       const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
@@ -146,31 +174,21 @@ export default function Home() {
       setFeed((curr) =>
         curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
       );
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }
 
   // realtime: reacciones y comentarios
   useEffect(() => {
     const channel = supabaseBrowser
       .channel('public:reactions-comments')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'reactions' },
-        (payload) => {
-          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-          if (sid) refreshOne(sid);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'comments' },
-        (payload) => {
-          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
-          if (sid) fetchComments(sid);
-        }
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
+        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) refreshOne(sid);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
+        const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+        if (sid) fetchComments(sid);
+      })
       .subscribe();
 
     return () => {
@@ -198,7 +216,6 @@ export default function Home() {
           comments: [],
         }));
         setFeed(norm);
-        // precargar comentarios
         norm.forEach((it) => fetchComments(it.id));
       } else {
         setMsg(j.error || 'No se pudo cargar el feed.');
@@ -215,7 +232,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
-  // enviar rumor/reporte (form izquierdo)
+  // enviar rumor/reporte
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -254,14 +271,14 @@ export default function Home() {
     }
   }
 
-  // reaccionar con animación y actualización optimista
+  // reaccionar (optimista + animaciones)
   async function react(submissionId: string, tag: string) {
     const voter = getVoter();
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
     try {
-      // optimista (animado)
+      // Optimista para que el contador “pop” de inmediato
       setFeed((curr) =>
         curr.map((it) =>
           it.id === submissionId
@@ -312,9 +329,7 @@ export default function Home() {
       if (j.ok) {
         setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }
   async function submitComment(submissionId: string, body: string, nickname?: string) {
     const r = await fetch(`/api/comments/${submissionId}`, {
@@ -334,7 +349,7 @@ export default function Home() {
 
   // reportar
   function openReport(id: string) {
-    if (getReported(id)) return; // ya reportado aquí
+    if (getReported(id)) return;
     setReportingId(id);
     setReportText('');
   }
@@ -347,15 +362,16 @@ export default function Home() {
     try {
       const r = await fetch('/api/report', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ submission_id: reportingId, reason: reportText.trim(), voter }),
+        headers: { 'content-type': 'application/json', 'x-voter': voter },
+        body: JSON.stringify({ submissionId: reportingId, reason: reportText.trim(), voter }),
       });
       const j = await r.json();
-      if (!j.ok) {
-        alert('No se pudo reportar: ' + (j.error || 'desconocido'));
+      if (!r.ok || !j.ok) {
+        if (r.status === 409) alert('Ya reportaste esta publicación.');
+        else if (r.status === 429) alert('Límite de reportes por hora. Intenta más tarde.');
+        else alert('No se pudo reportar: ' + (j?.error || 'desconocido'));
       } else {
         setReported(reportingId);
-        // si backend regresa nuevo total de reportes para esa card
         if (typeof j.report_count === 'number') {
           setFeed((curr) =>
             curr.map((it) => (it.id === reportingId ? { ...it, report_count: j.report_count } : it))
@@ -480,7 +496,7 @@ export default function Home() {
 
             return (
               <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white relative">
-                {/* Botón Reportar, esquina superior derecha */}
+                {/* Reportar */}
                 <button
                   className={`absolute right-3 top-3 px-3 py-1 rounded-full text-sm flex items-center gap-2 shadow-sm ${
                     reported ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-red-50 text-red-600 hover:bg-red-100'
@@ -506,19 +522,14 @@ export default function Home() {
                 {/* Reacciones con animación */}
                 <div className="flex flex-wrap items-center gap-2">
                   {REACTIONS.map((r) => (
-                    <motion.button
+                    <ReactionButton
                       key={r.key}
-                      whileTap={{ scale: 0.9 }}
-                      whileHover={{ scale: 1.1 }}
-                      onClick={() => react(it.id, r.tag)}
-                      className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
-                        reacted === r.tag ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50'
-                      }`}
+                      emoji={r.code}
                       title={r.label}
-                    >
-                      <span>{r.code}</span>
-                      <span>{(it.totals as any)[r.key]}</span>
-                    </motion.button>
+                      count={(it.totals as any)[r.key] as number}
+                      active={reacted === r.tag}
+                      onClick={() => react(it.id, r.tag)}
+                    />
                   ))}
                 </div>
 
@@ -526,10 +537,7 @@ export default function Home() {
                 <CommentsBlock
                   submissionId={it.id}
                   comments={it.comments ?? []}
-                  onAdd={async (body, nickname) => {
-                    const ok = await submitComment(it.id, body, nickname);
-                    return ok;
-                  }}
+                  onAdd={(body, nickname) => submitComment(it.id, body, nickname)}
                 />
               </article>
             );
@@ -573,6 +581,58 @@ export default function Home() {
         Costachisme © {new Date().getFullYear()} · Hecho con ❤ en Salina Cruz
       </div>
     </main>
+  );
+}
+
+/* ──────────────────── Botón de reacción con animaciones ──────────────────── */
+function ReactionButton({
+  emoji,
+  count,
+  active,
+  title,
+  onClick,
+}: {
+  emoji: string;
+  count: number;
+  active: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <motion.button
+      onClick={onClick}
+      title={title}
+      className={[
+        'px-3 py-1 rounded-full border text-sm flex items-center gap-1',
+        active ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50',
+      ].join(' ')}
+      whileTap={{ scale: 0.9 }}
+      animate={{ scale: active ? 1.06 : 1 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+      layout
+    >
+      <motion.span
+        key={active ? 'on' : 'off'}
+        initial={{ rotate: 0 }}
+        animate={{ rotate: active ? [0, -15, 0, 15, 0] : 0 }}
+        transition={{ duration: 0.35 }}
+      >
+        {emoji}
+      </motion.span>
+
+      {/* contador con pop cuando cambia */}
+      <AnimatePresence mode="popLayout">
+        <motion.span
+          key={count}
+          initial={{ y: -8, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 8, opacity: 0 }}
+          transition={{ duration: 0.18 }}
+        >
+          {count}
+        </motion.span>
+      </AnimatePresence>
+    </motion.button>
   );
 }
 
