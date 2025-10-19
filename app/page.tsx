@@ -1,13 +1,11 @@
-// app/page.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
+import { motion } from 'framer-motion';
 import { supabaseBrowser } from '@/lib/supabase-browser';
 
-/* ======================
-   Tipos
-====================== */
+/* ─────────────────────── Tipos ─────────────────────── */
 type Category = 'RUMOR' | 'REPORTE';
 
 type Submission = {
@@ -18,6 +16,8 @@ type Submission = {
   content: string;
   barrio: string | null;
   imagen_url?: string | null;
+  // opcionales que puede regresar /api/list
+  report_count?: number;
 };
 
 type ReactionTotals = {
@@ -36,9 +36,15 @@ type FeedItem = Submission & {
   comments?: Comment[];
 };
 
-/* ======================
-   Constantes / util
-====================== */
+/* ───────────────────── Constantes / util ───────────────────── */
+const schema = z.object({
+  category: z.enum(['RUMOR', 'REPORTE']),
+  title: z.string().min(5).max(80),
+  content: z.string().min(12).max(400),
+  barrio: z.string().max(60).optional().or(z.literal('')),
+  imagen_url: z.string().url().optional().or(z.literal('')),
+});
+
 const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string; tag: string }> = [
   { key: 'like_count', code: '👍', label: 'Me gusta', tag: 'like' },
   { key: 'dislike_count', code: '👎', label: 'No me gusta', tag: 'dislike' },
@@ -48,25 +54,30 @@ const REACTIONS: Array<{ key: keyof ReactionTotals; code: string; label: string;
   { key: 'sad_count', code: '😢', label: 'Triste', tag: 'sad' },
 ];
 
-const formSchema = z.object({
-  category: z.enum(['RUMOR', 'REPORTE']),
-  title: z.string().min(5).max(80),
-  content: z.string().min(12).max(400),
-  barrio: z.string().max(60).optional().or(z.literal('')),
-  imagen_url: z.string().url().optional().or(z.literal('')),
-});
+// filtros con figuritas (iconos)
+const FILTERS: Array<{ id: string; label: string; icon: string }> = [
+  { id: 'recent', label: 'Recientes', icon: '🆕' },
+  { id: 'popular', label: 'Populares', icon: '🔥' },
+  { id: 'commented', label: 'Comentados', icon: '💬' },
+  { id: 'viewed', label: 'Vistos', icon: '👀' },
+];
 
+// para admin-only; si quieres usa ENV o jwt
+const isAdmin = false;
+
+/* Identidad “voter” local */
 function getVoter() {
-  const k = '__voter_id__';
+  const K = '__voter_id__';
   if (typeof window === 'undefined') return 'anon';
-  let v = localStorage.getItem(k);
+  let v = localStorage.getItem(K);
   if (!v) {
-    v = `anon_${Math.random().toString(36).slice(2)}`;
-    localStorage.setItem(k, v);
+    v = 'anon_' + Math.random().toString(36).slice(2);
+    localStorage.setItem(K, v);
   }
   return v;
 }
 
+/* Última reacción usada por publicación (en esta device) */
 function getLocalReacted(submissionId: string) {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('__reacted__') || '{}';
@@ -81,92 +92,85 @@ function setLocalReacted(submissionId: string, reaction: string) {
   localStorage.setItem('__reacted__', JSON.stringify(map));
 }
 
-/* ======================
-   Página
-====================== */
+/* Reporte usado por publicación (en esta device) */
+function getReported(submissionId: string) {
+  if (typeof window === 'undefined') return false;
+  const raw = localStorage.getItem('__reported__') || '{}';
+  const map = JSON.parse(raw) as Record<string, boolean>;
+  return !!map[submissionId];
+}
+function setReported(submissionId: string) {
+  if (typeof window === 'undefined') return;
+  const raw = localStorage.getItem('__reported__') || '{}';
+  const map = JSON.parse(raw) as Record<string, boolean>;
+  map[submissionId] = true;
+  localStorage.setItem('__reported__', JSON.stringify(map));
+}
+
+/* ───────────────────────── Página ───────────────────────── */
 export default function Home() {
-  // pestaña Rumor/Buzón
+  // pestaña de envío
   const [tab, setTab] = useState<Category>('RUMOR');
 
-  // filtros UI
-  const [q, setQ] = useState('');
-  const [onlyBarrio, setOnlyBarrio] = useState('');
-  const [withImage, setWithImage] = useState(false);
-  type SortMode = 'recientes' | 'mas_votados' | 'mas_reacciones' | 'mas_comentados';
-  const [sortMode, setSortMode] = useState<SortMode>('recientes');
+  // filtros (figuritas)
+  const [filter, setFilter] = useState<string>('recent');
 
-  // feed y estados
+  const [loading, setLoading] = useState(false);
   const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [loadingFeed, setLoadingFeed] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // formulario
-  const [sending, setSending] = useState(false);
+  // formulario envío
   const [form, setForm] = useState({ title: '', content: '', barrio: '', imagen_url: '' });
 
-  // throttle global de recarga completa (fallback)
+  // modal de reportar
+  const [reportingId, setReportingId] = useState<string | null>(null);
+  const [reportText, setReportText] = useState('');
+  const [reportSending, setReportSending] = useState(false);
+
+  // debounce refresco general
   const refreshTimer = useRef<NodeJS.Timeout | null>(null);
-  const scheduleRefreshAll = () => {
+  const scheduleRefresh = () => {
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
       refreshTimer.current = null;
-      load();
+      load(); // reload preservando filtro
     }, 250);
   };
 
-  // ------- carga inicial (desde /api/list) ------
-  async function load() {
-    setLoadingFeed(true);
-    setMsg(null);
+  // refrescar solo una publicación (totales de reacciones)
+  async function refreshOne(submissionId: string) {
     try {
-      const r = await fetch('/api/list', { cache: 'no-store' });
+      const r = await fetch(`/api/reaction-totals/${submissionId}`, { cache: 'no-store' });
       const j = await r.json();
-      if (!j.ok) throw new Error(j.error || 'No se pudo cargar');
-      const normalized: FeedItem[] = (j.data as any[]).map((s) => ({
-        id: s.id,
-        created_at: s.created_at,
-        category: s.category,
-        title: s.title,
-        content: s.content,
-        barrio: s.barrio ?? null,
-        imagen_url: s.imagen_url ?? null,
-        totals: {
-          like_count: s.like_count ?? 0,
-          dislike_count: s.dislike_count ?? 0,
-          haha_count: s.haha_count ?? 0,
-          wow_count: s.wow_count ?? 0,
-          angry_count: s.angry_count ?? 0,
-          sad_count: s.sad_count ?? 0,
-        },
-        comments: [],
-      }));
-      setFeed(normalized);
-      normalized.forEach((it) => fetchComments(it.id));
-    } catch (e: any) {
-      setMsg(e?.message || 'Error cargando el feed');
-    } finally {
-      setLoadingFeed(false);
+      if (!j.ok || !j.totals) return;
+      setFeed((curr) =>
+        curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
+      );
+    } catch {
+      /* ignore */
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  // ------- realtime (reacciones y comentarios) -------
+  // realtime: reacciones y comentarios
   useEffect(() => {
     const channel = supabaseBrowser
       .channel('public:reactions-comments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
-        const sid =
-          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id ?? null;
-        if (sid) refreshOne(sid);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
-        const sid =
-          (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id ?? null;
-        if (sid) fetchComments(sid);
-      })
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reactions' },
+        (payload) => {
+          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+          if (sid) refreshOne(sid);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'comments' },
+        (payload) => {
+          const sid = (payload.new as any)?.submission_id ?? (payload.old as any)?.submission_id;
+          if (sid) fetchComments(sid);
+        }
+      )
       .subscribe();
 
     return () => {
@@ -174,48 +178,62 @@ export default function Home() {
     };
   }, []);
 
-  // refresco fino: sólo totales de una publicación (usa /api/reaction-totals/[id])
-  const perItemTimers = useRef<Record<string, NodeJS.Timeout>>({});
-  function refreshOne(id: string) {
-    if (perItemTimers.current[id]) return;
-    perItemTimers.current[id] = setTimeout(async () => {
-      delete perItemTimers.current[id];
-      try {
-        const r = await fetch(`/api/reaction-totals/${id}`, { cache: 'no-store' });
-        const j = await r.json();
-        if (j.ok && j.totals) {
-          setFeed((curr) =>
-            curr.map((it) => (it.id === id ? { ...it, totals: j.totals as ReactionTotals } : it))
-          );
-        } else {
-          scheduleRefreshAll();
-        }
-      } catch {
-        scheduleRefreshAll();
+  // cargar feed
+  async function load() {
+    try {
+      setLoading(true);
+      const r = await fetch(`/api/list?filter=${encodeURIComponent(filter)}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.ok) {
+        const norm: FeedItem[] = (j.data as Submission[]).map((s) => ({
+          ...s,
+          totals: {
+            like_count: (s as any).like_count ?? 0,
+            dislike_count: (s as any).dislike_count ?? 0,
+            haha_count: (s as any).haha_count ?? 0,
+            wow_count: (s as any).wow_count ?? 0,
+            angry_count: (s as any).angry_count ?? 0,
+            sad_count: (s as any).sad_count ?? 0,
+          },
+          comments: [],
+        }));
+        setFeed(norm);
+        // precargar comentarios
+        norm.forEach((it) => fetchComments(it.id));
+      } else {
+        setMsg(j.error || 'No se pudo cargar el feed.');
       }
-    }, 180);
+    } catch (e: any) {
+      setMsg(e?.message || 'Error de red al cargar el feed.');
+    } finally {
+      setLoading(false);
+    }
   }
 
-  // ------- enviar publicación (usa /api/submit) -------
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
+
+  // enviar rumor/reporte (form izquierdo)
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
-
-    const payload = {
-      category: tab,
-      title: form.title,
-      content: form.content,
-      barrio: form.barrio,
-      imagen_url: form.imagen_url,
-    };
-    const parsed = formSchema.safeParse(payload);
-    if (!parsed.success) {
-      setMsg(parsed.error.errors[0]?.message || 'Revisa los campos.');
-      return;
-    }
-
-    setSending(true);
+    setLoading(true);
     try {
+      const payload = {
+        category: tab,
+        title: form.title,
+        content: form.content,
+        barrio: form.barrio,
+        imagen_url: form.imagen_url,
+      };
+      const parsed = schema.safeParse(payload);
+      if (!parsed.success) {
+        setMsg(parsed.error.errors[0].message);
+        setLoading(false);
+        return;
+      }
       const r = await fetch('/api/submit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -223,68 +241,90 @@ export default function Home() {
       });
       const j = await r.json();
       if (!j.ok) {
-        setMsg(j.error || 'No se pudo enviar');
+        setMsg(j.error ?? 'Ocurrió un error. Revisa los campos.');
       } else {
-        setMsg('¡Enviado! Aparecerá cuando sea aprobado.');
+        setMsg('¡Enviado! Quedará visible cuando sea aprobado.');
         setForm({ title: '', content: '', barrio: '', imagen_url: '' });
+        load();
       }
-    } catch (e: any) {
-      setMsg(e?.message || 'Error de red');
+    } catch (err: any) {
+      setMsg(err?.message ?? 'Error desconocido');
     } finally {
-      setSending(false);
+      setLoading(false);
     }
   }
 
-  // ------- reaccionar (usa /api/react) -------
+  // reaccionar con animación y actualización optimista
   async function react(submissionId: string, tag: string) {
+    const voter = getVoter();
     const already = getLocalReacted(submissionId);
     if (already === tag) return;
 
     try {
+      // optimista (animado)
+      setFeed((curr) =>
+        curr.map((it) =>
+          it.id === submissionId
+            ? {
+                ...it,
+                totals: {
+                  ...it.totals,
+                  ...(tag === 'like' ? { like_count: it.totals.like_count + 1 } : {}),
+                  ...(tag === 'dislike' ? { dislike_count: it.totals.dislike_count + 1 } : {}),
+                  ...(tag === 'haha' ? { haha_count: it.totals.haha_count + 1 } : {}),
+                  ...(tag === 'wow' ? { wow_count: it.totals.wow_count + 1 } : {}),
+                  ...(tag === 'angry' ? { angry_count: it.totals.angry_count + 1 } : {}),
+                  ...(tag === 'sad' ? { sad_count: it.totals.sad_count + 1 } : {}),
+                },
+              }
+            : it
+        )
+      );
+
       const res = await fetch('/api/react', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: submissionId, reaction: tag, voter: getVoter() }),
+        body: JSON.stringify({ id: submissionId, reaction: tag, voter }),
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        alert('❌ Error al reaccionar: ' + (j?.error || 'desconocido'));
+        alert('❌ Error al reaccionar: ' + (j?.error || 'Desconocido'));
+        scheduleRefresh();
         return;
       }
-
       if (j.totals) {
         setFeed((curr) =>
-          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals } : it))
+          curr.map((it) => (it.id === submissionId ? { ...it, totals: j.totals as ReactionTotals } : it))
         );
       }
       setLocalReacted(submissionId, tag);
-    } catch (e: any) {
-      alert('⚠️ Fallo de red: ' + (e?.message || 'sin detalle'));
+    } catch (err: any) {
+      alert('⚠️ Fallo de red al reaccionar: ' + (err?.message || 'sin detalle'));
+      scheduleRefresh();
     }
   }
 
-  // ------- comentarios (usa /api/comments/[id]) -------
-  async function fetchComments(id: string) {
+  // comentarios
+  async function fetchComments(submissionId: string) {
     try {
-      const r = await fetch(`/api/comments/${id}`, { cache: 'no-store' });
+      const r = await fetch(`/api/comments/${submissionId}`);
       const j = await r.json();
       if (j.ok) {
-        setFeed((curr) => curr.map((it) => (it.id === id ? { ...it, comments: j.data } : it)));
+        setFeed((curr) => curr.map((it) => (it.id === submissionId ? { ...it, comments: j.data } : it)));
       }
     } catch {
-      /* silent */
+      /* ignore */
     }
   }
-
-  async function submitComment(id: string, body: string, nickname?: string) {
-    const r = await fetch(`/api/comments/${id}`, {
+  async function submitComment(submissionId: string, body: string, nickname?: string) {
+    const r = await fetch(`/api/comments/${submissionId}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ body, nickname }),
     });
     const j = await r.json();
     if (j.ok) {
-      fetchComments(id);
+      fetchComments(submissionId);
       return true;
     } else {
       alert('❌ Error al comentar: ' + (j.error || 'Desconocido'));
@@ -292,161 +332,85 @@ export default function Home() {
     }
   }
 
-  // Reemplaza tu función report() por esta
-async function report(submissionId: string, reason: string) {
-  try {
-    const r = await fetch('/api/report', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ submissionId, reason, voter: getVoter() }),
-    });
-    const j = await r.json();
-
-    if (!r.ok || !j.ok) {
-      // Mensajes claros según código
-      if (r.status === 409) {
-        alert('Ya reportaste esta publicación desde este dispositivo.');
-      } else if (r.status === 429) {
-        alert('Has alcanzado el límite de reportes por hora. Intenta más tarde.');
-      } else {
-        alert('No se pudo reportar: ' + (j?.error || 'desconocido'));
-      }
-      return false;
-    }
-
-    alert('✅ Reporte enviado. ¡Gracias!');
-    return true;
-  } catch (e: any) {
-    alert('⚠️ Fallo de red al reportar: ' + (e?.message || 'sin detalle'));
-    return false;
+  // reportar
+  function openReport(id: string) {
+    if (getReported(id)) return; // ya reportado aquí
+    setReportingId(id);
+    setReportText('');
   }
-}
+  async function sendReport() {
+    if (!reportingId) return;
+    const voter = getVoter();
+    if (!reportText.trim()) return;
 
-  // ------- filtros + sort -------
-  const filtered = useMemo(() => {
-    const words = q.trim().toLowerCase();
-    return feed
-      .filter((it) => {
-        const okTab = it.category === tab;
-        const okBarrio =
-          !onlyBarrio || (it.barrio || '').trim().toLowerCase().includes(onlyBarrio.toLowerCase());
-        const okText =
-          !words ||
-          it.title.toLowerCase().includes(words) ||
-          it.content.toLowerCase().includes(words) ||
-          (it.barrio || '').toLowerCase().includes(words);
-        const okImage = !withImage || !!it.imagen_url;
-        return okTab && okBarrio && okText && okImage;
-      })
-      .sort((a, b) => {
-        if (sortMode === 'recientes') {
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        }
-        if (sortMode === 'mas_votados') {
-          const sa = a.totals.like_count - a.totals.dislike_count;
-          const sb = b.totals.like_count - b.totals.dislike_count;
-          return sb - sa || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        }
-        if (sortMode === 'mas_reacciones') {
-          const ta =
-            a.totals.like_count +
-            a.totals.dislike_count +
-            a.totals.haha_count +
-            a.totals.wow_count +
-            a.totals.angry_count +
-            a.totals.sad_count;
-          const tb =
-            b.totals.like_count +
-            b.totals.dislike_count +
-            b.totals.haha_count +
-            b.totals.wow_count +
-            b.totals.angry_count +
-            b.totals.sad_count;
-          return tb - ta || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        }
-        const ca = a.comments?.length ?? 0;
-        const cb = b.comments?.length ?? 0;
-        return cb - ca || new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    setReportSending(true);
+    try {
+      const r = await fetch('/api/report', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ submission_id: reportingId, reason: reportText.trim(), voter }),
       });
-  }, [feed, tab, q, onlyBarrio, withImage, sortMode]);
+      const j = await r.json();
+      if (!j.ok) {
+        alert('No se pudo reportar: ' + (j.error || 'desconocido'));
+      } else {
+        setReported(reportingId);
+        // si backend regresa nuevo total de reportes para esa card
+        if (typeof j.report_count === 'number') {
+          setFeed((curr) =>
+            curr.map((it) => (it.id === reportingId ? { ...it, report_count: j.report_count } : it))
+          );
+        }
+        setReportingId(null);
+      }
+    } catch (e: any) {
+      alert('Fallo de red: ' + (e?.message ?? ''));
+    } finally {
+      setReportSending(false);
+    }
+  }
 
   const voterId = useMemo(() => getVoter(), []);
 
-  /* ======================
-     Render
-  ====================== */
   return (
     <main className="mx-auto max-w-5xl p-4">
-      {/* Tabs y filtro de texto */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      {/* Tabs Enviar */}
+      <div className="flex gap-2 mb-4">
         <button
           onClick={() => setTab('RUMOR')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
+          className={`px-4 py-2 rounded-full border ${tab === 'RUMOR' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
         >
           Rumor 🧐
         </button>
         <button
           onClick={() => setTab('REPORTE')}
-          className={`px-4 py-2 rounded-full border ${
-            tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'
-          }`}
+          className={`px-4 py-2 rounded-full border ${tab === 'REPORTE' ? 'bg-emerald-600 text-white' : 'bg-white'}`}
         >
           Buzón 📨
         </button>
-
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Filtrar por texto o barrio…"
-          className="ml-auto w-64 rounded-full border px-3 py-2 text-sm"
-        />
       </div>
 
-      {/* Controles: sort + filtros rápidos */}
-      <div className="flex flex-wrap items-center gap-2 mb-6">
-        {([
-          { key: 'recientes', label: 'Recientes' },
-          { key: 'mas_votados', label: 'Más votados' },
-          { key: 'mas_reacciones', label: 'Más reacciones' },
-          { key: 'mas_comentados', label: 'Más comentados' },
-        ] as { key: SortMode; label: string }[]).map((s) => (
+      {/* Barra de filtros con figuritas */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {FILTERS.map((f) => (
           <button
-            key={s.key}
-            onClick={() => setSortMode(s.key)}
-            className={`px-3 py-1 rounded-full border text-sm ${
-              sortMode === s.key ? 'bg-emerald-600 text-white' : 'bg-white'
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`px-3 py-1 rounded-full border text-sm flex items-center gap-2 ${
+              filter === f.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white'
             }`}
+            title={f.label}
           >
-            {s.label}
+            <span>{f.icon}</span>
+            <span>{f.label}</span>
           </button>
         ))}
-
-        <button
-          onClick={() => setWithImage((v) => !v)}
-          className={`px-3 py-1 rounded-full border text-sm ${
-            withImage ? 'bg-emerald-50 border-emerald-300' : 'bg-white'
-          }`}
-          title="Mostrar sólo publicaciones con imagen"
-        >
-          🖼️ Con imagen {withImage ? '✓' : ''}
-        </button>
-
-        <input
-          value={onlyBarrio}
-          onChange={(e) => setOnlyBarrio(e.target.value)}
-          placeholder="Filtrar por barrio…"
-          className="ml-auto w-48 rounded-full border px-3 py-1.5 text-sm"
-        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* FORM */}
-        <section className="rounded-2xl border p-4 bg-white">
-          <h2 className="text-lg font-semibold mb-4">
-            Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}
-          </h2>
+        <section className="rounded-2xl border p-4">
+          <h2 className="text-lg font-semibold mb-4">Enviar {tab === 'RUMOR' ? 'Rumor' : 'Reporte'}</h2>
 
           <form onSubmit={submit} className="space-y-3">
             <div>
@@ -476,7 +440,7 @@ async function report(submissionId: string, reason: string) {
                 <label className="block text-sm mb-1">Barrio/Colonia (opcional)</label>
                 <input
                   className="w-full rounded-lg border px-3 py-2"
-                  placeholder="Centro…"
+                  placeholder="Centro..."
                   value={form.barrio}
                   onChange={(e) => setForm((f) => ({ ...f, barrio: e.target.value }))}
                 />
@@ -485,7 +449,7 @@ async function report(submissionId: string, reason: string) {
                 <label className="block text-sm mb-1">URL de imagen (opcional)</label>
                 <input
                   className="w-full rounded-lg border px-3 py-2"
-                  placeholder="https://…"
+                  placeholder="https://..."
                   value={form.imagen_url}
                   onChange={(e) => setForm((f) => ({ ...f, imagen_url: e.target.value }))}
                 />
@@ -496,10 +460,10 @@ async function report(submissionId: string, reason: string) {
 
             <button
               type="submit"
-              disabled={sending}
+              disabled={loading}
               className="px-4 py-2 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
             >
-              {sending ? 'Enviando…' : 'Enviar'}
+              {loading ? 'Enviando...' : 'Enviar'}
             </button>
           </form>
         </section>
@@ -508,59 +472,53 @@ async function report(submissionId: string, reason: string) {
         <section className="space-y-4">
           <h2 className="text-lg font-semibold">Lo más reciente (aprobado)</h2>
 
-          {loadingFeed && <div className="text-sm text-gray-500">Cargando…</div>}
-          {!loadingFeed && filtered.length === 0 && (
-            <div className="text-sm text-gray-500">No hay publicaciones que coincidan con los filtros.</div>
-          )}
+          {feed.length === 0 && <div className="text-sm text-gray-500">Aún no hay publicaciones aprobadas.</div>}
 
-          {filtered.map((it) => {
+          {feed.map((it) => {
             const reacted = getLocalReacted(it.id);
+            const reported = getReported(it.id);
+
             return (
-              <article
-                key={it.id}
-                className="relative rounded-2xl border p-4 flex flex-col gap-3 bg-white"
-              >
-                {/* 🚩 Botón de reportar fijo arriba derecha */}
-                <ReportButton
-                  onReport={async (reason) => report(it.id, reason)}
-                />
+              <article key={it.id} className="rounded-2xl border p-4 flex flex-col gap-3 bg-white relative">
+                {/* Botón Reportar, esquina superior derecha */}
+                <button
+                  className={`absolute right-3 top-3 px-3 py-1 rounded-full text-sm flex items-center gap-2 shadow-sm ${
+                    reported ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'bg-red-50 text-red-600 hover:bg-red-100'
+                  }`}
+                  onClick={() => !reported && openReport(it.id)}
+                  disabled={reported}
+                  title={reported ? 'Ya reportaste desde este dispositivo' : 'Reportar'}
+                >
+                  🚩 Reportar
+                </button>
 
-                <div className="text-xs text-gray-500">
-                  {new Date(it.created_at).toLocaleString()}
-                </div>
-
+                <div className="text-xs text-gray-500">{new Date(it.created_at).toLocaleString()}</div>
                 <div>
-                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">
-                    {it.category}
-                  </div>
-                  <h3 className="font-semibold pr-10">{it.title}</h3>
+                  <div className="text-[10px] tracking-wide text-gray-500 mb-1">{it.category}</div>
+                  <h3 className="font-semibold">{it.title}</h3>
                   <p className="text-sm mt-1">{it.content}</p>
                   {it.barrio ? <div className="text-xs mt-1">📍 {it.barrio}</div> : null}
-                  {it.imagen_url ? (
-                    <img
-                      src={it.imagen_url}
-                      alt="Imagen"
-                      className="mt-2 rounded-lg max-h-64 w-full object-cover"
-                    />
+                  {isAdmin && typeof it.report_count === 'number' && it.report_count > 0 ? (
+                    <div className="text-xs mt-1 text-red-600">(Reportes: {it.report_count})</div>
                   ) : null}
                 </div>
 
-                {/* Reacciones */}
+                {/* Reacciones con animación */}
                 <div className="flex flex-wrap items-center gap-2">
                   {REACTIONS.map((r) => (
-                    <button
+                    <motion.button
                       key={r.key}
+                      whileTap={{ scale: 0.9 }}
+                      whileHover={{ scale: 1.1 }}
                       onClick={() => react(it.id, r.tag)}
                       className={`px-3 py-1 rounded-full border text-sm flex items-center gap-1 ${
-                        reacted === r.tag
-                          ? 'bg-emerald-50 border-emerald-300'
-                          : 'bg-white hover:bg-gray-50'
+                        reacted === r.tag ? 'bg-emerald-50 border-emerald-300' : 'bg-white hover:bg-gray-50'
                       }`}
                       title={r.label}
                     >
                       <span>{r.code}</span>
                       <span>{(it.totals as any)[r.key]}</span>
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
 
@@ -568,13 +526,47 @@ async function report(submissionId: string, reason: string) {
                 <CommentsBlock
                   submissionId={it.id}
                   comments={it.comments ?? []}
-                  onAdd={(body, nickname) => submitComment(it.id, body, nickname)}
+                  onAdd={async (body, nickname) => {
+                    const ok = await submitComment(it.id, body, nickname);
+                    return ok;
+                  }}
                 />
               </article>
             );
           })}
         </section>
       </div>
+
+      {/* Modal de Reporte */}
+      {reportingId && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
+          <div className="bg-white w-full max-w-md rounded-xl p-4">
+            <h3 className="font-semibold text-lg mb-2">¿Por qué la reportas?</h3>
+            <textarea
+              value={reportText}
+              onChange={(e) => setReportText(e.target.value)}
+              className="w-full border rounded-lg p-2 h-28"
+              placeholder="Explica brevemente el motivo…"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                className="px-3 py-2 rounded-lg border"
+                onClick={() => !reportSending && setReportingId(null)}
+                disabled={reportSending}
+              >
+                Cancelar
+              </button>
+              <button
+                className="px-3 py-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
+                onClick={sendReport}
+                disabled={reportSending || reportText.trim().length < 3}
+              >
+                {reportSending ? 'Enviando…' : 'Enviar reporte'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="text-center text-xs text-gray-500 mt-10">
@@ -584,69 +576,7 @@ async function report(submissionId: string, reason: string) {
   );
 }
 
-/* ======================
-   Botón/menú de Reporte
-====================== */
-function ReportButton({
-  onReport,
-}: {
-  onReport: (reason: string) => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [reason, setReason] = useState('');
-
-  return (
-    <div className="absolute right-3 top-3">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-full border px-2 py-1 text-xs bg-white hover:bg-red-50"
-        title="Reportar publicación"
-      >
-        🚩 Reportar
-      </button>
-
-      {open && (
-        <div className="mt-2 w-64 rounded-xl border bg-white p-3 shadow-lg">
-          <p className="text-sm font-medium mb-2">¿Por qué la reportas?</p>
-          <textarea
-            className="w-full rounded-lg border px-2 py-1 text-sm h-20"
-            placeholder="Ej. contiene datos personales, insultos, etc."
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          />
-          <div className="mt-2 flex items-center justify-end gap-2">
-            <button
-              className="px-3 py-1 text-sm rounded border"
-              onClick={() => setOpen(false)}
-            >
-              Cancelar
-            </button>
-            <button
-              className="px-3 py-1 text-sm rounded bg-red-600 text-white disabled:opacity-50"
-              disabled={sending || reason.trim().length < 3}
-              onClick={async () => {
-                setSending(true);
-                const ok = await onReport(reason.trim());
-                setSending(false);
-                if (ok) {
-                  setReason('');
-                  setOpen(false);
-                }
-              }}
-            >
-              {sending ? 'Enviando…' : 'Enviar'}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ======================
-   Bloque de comentarios
-====================== */
+/* ──────────────────── Bloque de comentarios ──────────────────── */
 function CommentsBlock({
   submissionId,
   comments,
@@ -675,10 +605,7 @@ function CommentsBlock({
 
   return (
     <div className="border-t pt-3 mt-2">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="text-sm text-emerald-700 hover:underline"
-      >
+      <button onClick={() => setOpen((v) => !v)} className="text-sm text-emerald-700 hover:underline">
         {open ? 'Ocultar comentarios' : `Comentarios (${comments.length})`}
       </button>
 
@@ -715,9 +642,7 @@ function CommentsBlock({
                 <div>{c.body}</div>
               </li>
             ))}
-            {comments.length === 0 && (
-              <li className="text-xs text-gray-500">Sé el primero en comentar.</li>
-            )}
+            {comments.length === 0 && <li className="text-xs text-gray-500">Sé el primero en comentar.</li>}
           </ul>
         </div>
       )}
