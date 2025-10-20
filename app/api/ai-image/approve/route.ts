@@ -1,28 +1,37 @@
+// app/api/ai-image/approve/route.ts
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export async function POST(req: Request) {
   try {
     const { id, approvedBy } = await req.json();
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${process.env.ADMIN_QUEUE_TOKEN}`) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
+    // Token del panel
+    const auth = req.headers.get("authorization");
+    if (auth !== `Bearer ${process.env.ADMIN_QUEUE_TOKEN}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // 1) Marcar como aprobado en la cola
     const { data, error } = await supabaseAdmin
       .from("ai_images")
-      .update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: approvedBy ?? null })
-      .eq('id', id)
+      .update({ status: "approved", approved_at: new Date().toISOString(), approved_by: approvedBy })
+      .eq("id", id)
       .select()
       .single();
 
     if (error) throw error;
 
+    // 2) Escribir la URL en tu tabla real (submissions)
     try {
-      // Si existe posts.image_url, se actualiza automáticamente
-      await supabaseAdmin.from('posts').update({ image_url: (data as any).image_url }).eq('id', (data as any).post_id);
+      await supabaseAdmin
+        .from("submissions")              // <— ANTES decía 'posts'
+        .update({ image_url: (data as any).image_url })
+        .eq("id", (data as any).post_id);   // ✅ correcto
     } catch {}
 
     return NextResponse.json({ ok: true, image: data });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: e?.message || "Error" }, { status: 500 });
   }
 }
