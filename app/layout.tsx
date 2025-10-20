@@ -33,7 +33,21 @@ twitter: {
 },
   icons: { icon: "/favicon.ico" }, // mantiene solo el favicon
 };
+// app/layout.tsx (fragmento)
+import Footer from "./components/Footer";
+// ...
 
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="es">
+      <body className="min-h-screen bg-white text-[#111827]">
+        {/* header aquí */}
+        <main className="mx-auto max-w-6xl px-4 pt-20">{children}</main>
+        <Footer />   {/* Footer al final*/}
+      </body>
+    </html>
+  );
+}
 /** Script inline: oculta/mostrar + shrink del header en scroll */
 function HeaderScrollScript() {
   const code = `
