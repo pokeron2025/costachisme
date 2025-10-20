@@ -98,13 +98,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         {/* CONTENIDO (dejamos espacio superior para el header) */}
         <main className="mx-auto max-w-6xl px-4 pt-20">{children}</main>
-
-        {/* FOOTER simple */}
-        <footer className="mt-10 border-t">
-          <div className="mx-auto max-w-6xl text-center text-sm text-gray-600 p-6">
-            Costachisme © {new Date().getFullYear()} · Hecho con <span className="mx-1">❤️</span> en Salina Cruz
-          </div>
-        </footer>
+      
       </body>
     </html>
   );
