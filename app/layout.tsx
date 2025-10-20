@@ -10,22 +10,27 @@ export const metadata = {
   description: "Comparte y descubre chismes y reportes por barrio, de forma anónima.",
   metadataBase: new URL("https://costachisme.com"), // CAMBIA ESTA URL
   openGraph: {
-    title: "Costachisme",
-    description: "Rumores y reportes por barrio, anónimos.",
-    url: "https://costachisme.com", // CAMBIA ESTA URL
-    siteName: "Costachisme",
-    images: [
-      { url: "/og.png", width: 1200, height: 630, alt: "Costachisme" },
-    ],
-    locale: "es_MX",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Costachisme",
-    description: "Rumores y reportes por barrio, anónimos.",
-    images: ["/og.png"],
-  },
+  title: "Costachisme",
+  description: "Rumores y reportes por barrio, anónimos.",
+  url: "https://costachisme.com",
+  siteName: "Costachisme",
+  images: [
+    {
+      url: "https://costachisme.com/og.png", // 👈 absoluto
+      width: 1200,
+      height: 630,
+      alt: "Costachisme",
+    },
+  ],
+  locale: "es_MX",
+  type: "website",
+},
+twitter: {
+  card: "summary_large_image",
+  title: "Costachisme",
+  description: "Rumores y reportes por barrio, anónimos.",
+  images: ["https://costachisme.com/og.png"], // 👈 absoluto
+},
   icons: { icon: "/favicon.ico" }, // mantiene solo el favicon
 };
 
