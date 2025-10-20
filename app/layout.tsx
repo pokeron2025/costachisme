@@ -1,4 +1,4 @@
-import NavLink from "@/components/NavLink";
+import NavLink from "./components/NavLink";
 import "./globals.css";
 import type { Metadata } from "next";
 import Image from "next/image";
