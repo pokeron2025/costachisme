@@ -1,18 +1,32 @@
+import NavLink from "./components/NavLink";
 import "./globals.css";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import React from "react";
 
-export const metadata: Metadata = {
-  title: "Costachisme — Rumores, risas y voz ciudadana",
-  description:
-    "Chismógrafo urbano con propósito: entretenimiento y buzón ciudadano.",
-  icons: {
-    icon: "/logo-icon.svg",
-    shortcut: "/logo-icon.svg",
-    apple: "/logo-icon.svg",
+export const metadata = {
+  title: "Costachisme — Rumores locales de Salina Cruz",
+  description: "Comparte y descubre chismes y reportes por barrio, de forma anónima.",
+  metadataBase: new URL("https://costachisme.com"), // CAMBIA ESTA URL
+  openGraph: {
+    title: "Costachisme",
+    description: "Rumores y reportes por barrio, anónimos.",
+    url: "https://costachisme.com", // CAMBIA ESTA URL
+    siteName: "Costachisme",
+    images: [
+      { url: "/og.png", width: 1200, height: 630, alt: "Costachisme" },
+    ],
+    locale: "es_MX",
+    type: "website",
   },
+  twitter: {
+    card: "summary_large_image",
+    title: "Costachisme",
+    description: "Rumores y reportes por barrio, anónimos.",
+    images: ["/og.png"],
+  },
+  icons: { icon: "/favicon.ico" }, // mantiene solo el favicon
 };
 
 /** Script inline: oculta/mostrar + shrink del header en scroll */
@@ -72,11 +86,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
             </Link>
 
-            <nav className="ml-auto flex items-center gap-1 sm:gap-3 text-[14px]">
-              <Link href="/" className="px-3 py-1 rounded hover:bg-white/10 transition">Inicio</Link>
-              <Link href="/contacto" className="px-3 py-1 rounded hover:bg-white/10 transition">Contacto</Link>
-              <Link href="/acerca" className="px-3 py-1 rounded hover:bg-white/10 transition">Acerca</Link>
-            </nav>
+            <nav className="flex gap-4 text-sm font-medium">
+  <NavLink href="/">Inicio</NavLink>
+  <NavLink href="/acerca">Acerca de</NavLink>
+  <NavLink href="/contacto">Contacto</NavLink>
+</nav>
           </div>
         </header>
 
