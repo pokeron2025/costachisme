@@ -267,4 +267,25 @@ html, body { background: var(--bg); color: var(--fg); }
 #site-header {
   will-change: transform, box-shadow;
   transition: transform 0.3s ease, box-shadow 0.25s ease;
+
+  /* Diseño de Tarjetas - Paso 3 */
+
+  .card, [role="article"], .submission-card {
+      border-radius: 12px;
+      border: 1px solid rgba(var(--brand-500-rgb), 0.2);
+      background: linear-gradient(135deg, rgba(var(--brand-50-rgb), 0.5) 0%, rgba(255,255,255, 0.8) 100%);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+  }
+
+  .card:hover, [role="article"]:hover, .submission-card:hover {
+      border-color: rgba(var(--brand-500-rgb), 0.4);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      transform: translateY(-2px);
+  }
+
+  .card:active, [role="article"]:active {
+      transform: translateY(0);
+  }
 }
